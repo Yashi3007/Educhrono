@@ -93,7 +93,10 @@ export default function DashboardTimetable() {
       data = data.map((i) => ({
         ...i,
         faculty: i.faculty?.trim(),
-        section: i.section?.trim().toUpperCase().replace(/\s*\(B\d\)/gi, ""),
+        section: i.section
+          ?.trim()
+          .toUpperCase()
+          .replace(/\s*\(B\d\)/gi, ""),
         day: i.day?.trim(),
         time_slot: i.time_slot?.trim(),
       }));
@@ -141,34 +144,34 @@ export default function DashboardTimetable() {
   const handleDownloadTemplate = (type) =>
     window.open(`http://localhost:8000/upload/template/${type}`, "_blank");
 
-const downloadPDF = async () => {
-  const input = tableRef.current;
-  if (!input) return;
+  const downloadPDF = async () => {
+    const input = tableRef.current;
+    if (!input) return;
 
-  // Clone timetable node
-  const clone = input.cloneNode(true);
-  document.body.appendChild(clone);
-  clone.style.position = "absolute";
-  clone.style.left = "-9999px";
-  clone.style.background = "#ffffff";
+    // Clone timetable node
+    const clone = input.cloneNode(true);
+    document.body.appendChild(clone);
+    clone.style.position = "absolute";
+    clone.style.left = "-9999px";
+    clone.style.background = "#ffffff";
 
-  // ✅ Sanitize OKLCH / LAB colors (replace with RGB)
-  const sanitizeColors = (el) => {
-    const computedStyle = window.getComputedStyle(el);
-    for (const prop of ["color", "backgroundColor", "borderColor"]) {
-      const val = computedStyle[prop];
-      if (val && val.includes("oklch")) {
-        // Replace any OKLCH-based color with neutral RGB
-        el.style[prop] = "#f8fafc"; // Tailwind neutral background
+    // ✅ Sanitize OKLCH / LAB colors (replace with RGB)
+    const sanitizeColors = (el) => {
+      const computedStyle = window.getComputedStyle(el);
+      for (const prop of ["color", "backgroundColor", "borderColor"]) {
+        const val = computedStyle[prop];
+        if (val && val.includes("oklch")) {
+          // Replace any OKLCH-based color with neutral RGB
+          el.style[prop] = "#f8fafc"; // Tailwind neutral background
+        }
       }
-    }
-    for (const child of el.children) sanitizeColors(child);
-  };
-  sanitizeColors(clone);
+      for (const child of el.children) sanitizeColors(child);
+    };
+    sanitizeColors(clone);
 
-  // ✅ Inject fallback CSS to avoid re-triggering Tailwind dynamic colors
-  const style = document.createElement("style");
-  style.innerHTML = `
+    // ✅ Inject fallback CSS to avoid re-triggering Tailwind dynamic colors
+    const style = document.createElement("style");
+    style.innerHTML = `
     * {
       font-family: 'Inter', sans-serif !important;
       color: #111827 !important;
@@ -184,63 +187,94 @@ const downloadPDF = async () => {
     tr:nth-child(even) td:not(:first-child) { background: rgb(236, 253, 245) !important; }
     .lunch-cell { background: rgb(255, 247, 204) !important; font-weight: bold !important; }
   `;
-  clone.prepend(style);
+    clone.prepend(style);
 
-  try {
-    const canvas = await html2canvas(clone, {
-      scale: 3,
-      backgroundColor: "#ffffff",
-      logging: false,
-      useCORS: true,
-    });
+    try {
+      const canvas = await html2canvas(clone, {
+        scale: 3,
+        backgroundColor: "#ffffff",
+        logging: false,
+        useCORS: true,
+      });
 
-    document.body.removeChild(clone);
+      document.body.removeChild(clone);
 
-    const pdf = new jsPDF("landscape", "mm", "a4");
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
+      const pdf = new jsPDF("landscape", "mm", "a4");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
 
-    const imgData = canvas.toDataURL("image/png");
-    const aspectRatio = canvas.width / canvas.height;
-    let imgWidth = pageWidth - 10;
-    let imgHeight = imgWidth / aspectRatio;
-    if (imgHeight > pageHeight - 45) {
-      imgHeight = pageHeight - 45;
-      imgWidth = imgHeight * aspectRatio;
+      const imgData = canvas.toDataURL("image/png");
+      const aspectRatio = canvas.width / canvas.height;
+      let imgWidth = pageWidth - 10;
+      let imgHeight = imgWidth / aspectRatio;
+      if (imgHeight > pageHeight - 45) {
+        imgHeight = pageHeight - 45;
+        imgWidth = imgHeight * aspectRatio;
+      }
+
+      const x = (pageWidth - imgWidth) / 2;
+      const y = 45;
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(14);
+      pdf.text(
+        "MORADABAD INSTITUTE OF TECHNOLOGY, MORADABAD",
+        pageWidth / 2,
+        15,
+        { align: "center" }
+      );
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(12);
+      pdf.text(
+        "Department of Computer Science & Engineering - Timetable",
+        pageWidth / 2,
+        22,
+        { align: "center" }
+      );
+
+      const studentName = user?.name || "Student";
+      const sem = semester || "N/A";
+      const sec = section || "N/A";
+      const academicYear = "2025–26";
+
+      pdf.setFontSize(11);
+      pdf.text(
+        `Student: ${studentName}   |   Semester: ${sem}   |   Section: ${sec}   |   Academic Year: ${academicYear}`,
+        pageWidth / 2,
+        30,
+        { align: "center" }
+      );
+
+      pdf.addImage(imgData, "PNG", x, y, imgWidth, imgHeight);
+      const date = new Date().toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+      pdf.setFontSize(10);
+      pdf.setTextColor(90);
+      pdf.text(
+        `Generated by EduChrono on ${date}`,
+        pageWidth / 2,
+        pageHeight - 8,
+        { align: "center" }
+      );
+
+      pdf.save(`Timetable_${studentName}.pdf`);
+    } catch (err) {
+      console.error("PDF Error:", err);
+      alert("Error generating PDF.");
     }
+  };
 
-    const x = (pageWidth - imgWidth) / 2;
-    const y = 45;
-
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(14);
-    pdf.text("MORADABAD INSTITUTE OF TECHNOLOGY, MORADABAD", pageWidth / 2, 15, { align: "center" });
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(12);
-    pdf.text("Department of Computer Science & Engineering - Timetable", pageWidth / 2, 22, { align: "center" });
-
-    const studentName = user?.name || "Student";
-    const sem = semester || "N/A";
-    const sec = section || "N/A";
-    const academicYear = "2025–26";
-
-    pdf.setFontSize(11);
-    pdf.text(`Student: ${studentName}   |   Semester: ${sem}   |   Section: ${sec}   |   Academic Year: ${academicYear}`, pageWidth / 2, 30, { align: "center" });
-
-    pdf.addImage(imgData, "PNG", x, y, imgWidth, imgHeight);
-    const date = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-    pdf.setFontSize(10);
-    pdf.setTextColor(90);
-    pdf.text(`Generated by EduChrono on ${date}`, pageWidth / 2, pageHeight - 8, { align: "center" });
-
-    pdf.save(`Timetable_${studentName}.pdf`);
-  } catch (err) {
-    console.error("PDF Error:", err);
-    alert("Error generating PDF.");
-  }
-};
-
-  const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const days = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ];
   const timeSlots = [
     "9:00–10:00",
     "10:00–11:00",
@@ -314,7 +348,7 @@ const downloadPDF = async () => {
               </p>
             )}
           </section>
-         {/* View Uploaded Data */}
+          {/* View Uploaded Data */}
           <section className="bg-white p-6 rounded-xl shadow-md mb-10">
             <h3 className="text-xl font-semibold text-gray-700 mb-4">
               👁️ View Uploaded Data
@@ -502,7 +536,10 @@ const downloadPDF = async () => {
                                   l.subject === subj &&
                                   l.time_slot === lab.time_slot
                               )
-                              .map((l) => `${l.room}${l.batch ? ` (${l.batch})` : ""}`)
+                              .map(
+                                (l) =>
+                                  `${l.room}${l.batch ? ` (${l.batch})` : ""}`
+                              )
                               .join(" | ");
 
                             // Determine if lab spans 2 hours
@@ -586,11 +623,16 @@ const downloadPDF = async () => {
                                   className="mb-1 border-b border-gray-300 pb-1 last:border-0"
                                 >
                                   <span className="block font-semibold text-gray-900">
-                                    {entry.subject_code || entry.subject} ({entry.type}
+                                    {entry.subject_code || entry.subject} (
+                                    {entry.type}
                                     {entry.batch ? ` - ${entry.batch}` : ""})
                                   </span>
-                                  <span className="block text-gray-700">{entry.faculty}</span>
-                                  <span className="block text-gray-600">{entry.room}</span>
+                                  <span className="block text-gray-700">
+                                    {entry.faculty}
+                                  </span>
+                                  <span className="block text-gray-600">
+                                    {entry.room}
+                                  </span>
                                   <span className="block text-gray-500">
                                     Sec {entry.section} | Sem {entry.year}
                                   </span>
@@ -598,12 +640,10 @@ const downloadPDF = async () => {
                               ))}
                             </td>
                           );
-
                         })}
                       </tr>
                     ))}
                   </tbody>
-
                 </table>
               </div>
             )}
