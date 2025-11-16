@@ -4,7 +4,6 @@ import FileUploader from "../components/FileUploader";
 import API from "../services/api";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
-import TimetableTable from "../components/TimetableTable";
 
 export default function DashboardTimetable() {
   const [uploading, setUploading] = useState(false);
@@ -122,162 +121,169 @@ export default function DashboardTimetable() {
   // 🔹 Auto Filter
   useEffect(() => {
     let filtered = timetable;
-
     if (selectedFaculty)
       filtered = filtered.filter(
         (t) =>
-          t.faculty?.toLowerCase().trim() ===
-          selectedFaculty.toLowerCase().trim()
+          t.faculty?.trim().toUpperCase() ===
+          selectedFaculty.trim().toUpperCase()
       );
-
     if (selectedSection)
       filtered = filtered.filter(
         (t) =>
-          t.section?.replace(/\s+/g, "").toUpperCase() ===
-          selectedSection.replace(/\s+/g, "").toUpperCase()
+          t.section?.trim().toUpperCase() ===
+          selectedSection.trim().toUpperCase()
       );
-
     if (selectedSemester)
       filtered = filtered.filter(
-        (t) =>
-          String(t.year).replace(/\D/g, "") ===
-          String(selectedSemester).replace(/\D/g, "")
+        (t) => String(t.year) === String(selectedSemester)
       );
-
     setFilteredTimetable(filtered);
   }, [selectedFaculty, selectedSection, selectedSemester, timetable]);
-
 
   // 🔹 Template Download
   const handleDownloadTemplate = (type) =>
     window.open(`http://localhost:8000/upload/template/${type}`, "_blank");
 
-// 📄 Download Department Timetable as PDF (Admin/HOD)
-const downloadPDF = async () => {
-  const input = tableRef.current;
-  if (!input) {
-    alert("No timetable to export");
-    return;
-  }
+  const downloadPDF = async () => {
+    const input = tableRef.current;
+    if (!input) return;
 
-  // Clone the table for a clean snapshot
-  const clone = input.cloneNode(true);
-  document.body.appendChild(clone);
-  clone.style.position = "absolute";
-  clone.style.left = "-9999px";
-  clone.style.background = "#ffffff";
+    // Clone timetable node
+    const clone = input.cloneNode(true);
+    document.body.appendChild(clone);
+    clone.style.position = "absolute";
+    clone.style.left = "-9999px";
+    clone.style.background = "#ffffff";
 
-  // 🧩 Sanitize Tailwind oklch() colors (same as Student logic)
-  const sanitizeColors = (el) => {
-    const computed = window.getComputedStyle(el);
-    for (const prop of ["color", "backgroundColor", "borderColor"]) {
-      const val = computed[prop];
-      if (val && val.includes("oklch")) el.style[prop] = "#f8fafc";
+    // ✅ Sanitize OKLCH / LAB colors (replace with RGB)
+    const sanitizeColors = (el) => {
+      const computedStyle = window.getComputedStyle(el);
+      for (const prop of ["color", "backgroundColor", "borderColor"]) {
+        const val = computedStyle[prop];
+        if (val && val.includes("oklch")) {
+          // Replace any OKLCH-based color with neutral RGB
+          el.style[prop] = "#f8fafc"; // Tailwind neutral background
+        }
+      }
+      for (const child of el.children) sanitizeColors(child);
+    };
+    sanitizeColors(clone);
+
+    // ✅ Inject fallback CSS to avoid re-triggering Tailwind dynamic colors
+    const style = document.createElement("style");
+    style.innerHTML = `
+    * {
+      font-family: 'Inter', sans-serif !important;
+      color: #111827 !important;
     }
-    for (const child of el.children) sanitizeColors(child);
-  };
-  sanitizeColors(clone);
-
-  const style = document.createElement("style");
-  style.innerHTML = `
-    * { font-family: 'Inter', sans-serif !important; color: #111827 !important; }
     table { border-collapse: collapse !important; width: 100% !important; }
-    th, td { border: 1px solid #000 !important; padding: 6px !important; text-align: center !important; }
-    th { background: rgb(219,234,254) !important; }
-    td:first-child { background: rgb(224,242,254) !important; font-weight: 600 !important; }
-    .lunch-cell { background: rgb(255,247,204) !important; font-weight: bold !important; }
+    th, td {
+      border: 1px solid #000 !important;
+      text-align: center !important;
+      padding: 6px !important;
+    }
+    th { background: rgb(219, 234, 254) !important; }
+    td:first-child { background: rgb(224, 242, 254) !important; font-weight: 600 !important; }
+    tr:nth-child(even) td:not(:first-child) { background: rgb(236, 253, 245) !important; }
+    .lunch-cell { background: rgb(255, 247, 204) !important; font-weight: bold !important; }
   `;
-  clone.prepend(style);
+    clone.prepend(style);
 
-  try {
-    const canvas = await html2canvas(clone, {
-      scale: 3,
-      backgroundColor: "#ffffff",
-      logging: false,
-      useCORS: true,
-    });
-    document.body.removeChild(clone);
+    try {
+      const canvas = await html2canvas(clone, {
+        scale: 3,
+        backgroundColor: "#ffffff",
+        logging: false,
+        useCORS: true,
+      });
 
-    const pdf = new jsPDF("landscape", "mm", "a4");
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgData = canvas.toDataURL("image/png");
-    const aspectRatio = canvas.width / canvas.height;
+      document.body.removeChild(clone);
 
-    let imgWidth = pageWidth - 10;
-    let imgHeight = imgWidth / aspectRatio;
-    if (imgHeight > pageHeight - 45) {
-      imgHeight = pageHeight - 45;
-      imgWidth = imgHeight * aspectRatio;
+      const pdf = new jsPDF("landscape", "mm", "a4");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+
+      const imgData = canvas.toDataURL("image/png");
+      const aspectRatio = canvas.width / canvas.height;
+      let imgWidth = pageWidth - 10;
+      let imgHeight = imgWidth / aspectRatio;
+      if (imgHeight > pageHeight - 45) {
+        imgHeight = pageHeight - 45;
+        imgWidth = imgHeight * aspectRatio;
+      }
+
+      const x = (pageWidth - imgWidth) / 2;
+      const y = 45;
+
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(14);
+      pdf.text(
+        "MORADABAD INSTITUTE OF TECHNOLOGY, MORADABAD",
+        pageWidth / 2,
+        15,
+        { align: "center" }
+      );
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(12);
+      pdf.text(
+        "Department of Computer Science & Engineering - Timetable",
+        pageWidth / 2,
+        22,
+        { align: "center" }
+      );
+
+      const studentName = user?.name || "Student";
+      const sem = semester || "N/A";
+      const sec = section || "N/A";
+      const academicYear = "2025–26";
+
+      pdf.setFontSize(11);
+      pdf.text(
+        `Student: ${studentName}   |   Semester: ${sem}   |   Section: ${sec}   |   Academic Year: ${academicYear}`,
+        pageWidth / 2,
+        30,
+        { align: "center" }
+      );
+
+      pdf.addImage(imgData, "PNG", x, y, imgWidth, imgHeight);
+      const date = new Date().toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+      pdf.setFontSize(10);
+      pdf.setTextColor(90);
+      pdf.text(
+        `Generated by EduChrono on ${date}`,
+        pageWidth / 2,
+        pageHeight - 8,
+        { align: "center" }
+      );
+
+      pdf.save(`Timetable_${studentName}.pdf`);
+    } catch (err) {
+      console.error("PDF Error:", err);
+      alert("Error generating PDF.");
     }
+  };
 
-    const x = (pageWidth - imgWidth) / 2;
-    const y = 45;
-
-    // 🏫 Header
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(14);
-    pdf.text(
-      "MORADABAD INSTITUTE OF TECHNOLOGY, MORADABAD",
-      pageWidth / 2,
-      15,
-      { align: "center" }
-    );
-
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(12);
-    pdf.text(
-      "Department of Computer Science & Engineering - Consolidated Timetable",
-      pageWidth / 2,
-      22,
-      { align: "center" }
-    );
-
-    const name = user?.name || "Admin/HOD";
-    const academicYear = "2025–26";
-    const sem = selectedSemester || "All";
-    const sec = selectedSection || "All";
-    const faculty = selectedFaculty || "All";
-
-    pdf.setFontSize(11);
-    pdf.text(
-      `Generated by: ${name} | Semester: ${sem} | Section: ${sec} | Faculty: ${faculty} | Academic Year: ${academicYear}`,
-      pageWidth / 2,
-      30,
-      { align: "center" }
-    );
-
-    // Add table image
-    pdf.addImage(imgData, "PNG", x, y, imgWidth, imgHeight);
-
-    const date = new Date().toLocaleDateString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
-    pdf.setFontSize(10);
-    pdf.setTextColor(90);
-    let footerY = y + imgHeight + 10;
-
-    if (footerY > pageHeight - 20) {
-      pdf.addPage();
-      footerY = 20;
-    }
-
-    pdf.setDrawColor(180);
-    pdf.setLineWidth(0.2);
-    pdf.line(10, footerY - 5, pageWidth - 10, footerY - 5);
-
-    pdf.text(`Generated by EduChrono on ${date}`, pageWidth / 2, footerY, {
-      align: "center",
-    });
-
-    pdf.save(`EduChrono_Timetable_${name}.pdf`);
-  } catch (err) {
-    console.error("PDF Error:", err);
-    alert("Error generating PDF.");
-  }
-};
+  const days = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ];
+  const timeSlots = [
+    "9:00–10:00",
+    "10:00–11:00",
+    "11:00–12:00",
+    "12:00–1:00",
+    "1:00–2:00",
+    "2:00–3:00",
+    "3:00–4:00",
+  ];
 
   return (
     <div className="min-h-screen bg-gray-50 p-8">
@@ -474,25 +480,173 @@ const downloadPDF = async () => {
             </div>
 
             {/* Timetable */}
-
             {!loadingView && filteredTimetable.length > 0 && (
-            <div ref={tableRef} className="overflow-x-auto mt-6">
-              <TimetableTable
-                timetable={filteredTimetable}
-                days={["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]}
-                timeSlots={[
-                  "9:00–10:00",
-                  "10:00–11:00",
-                  "11:00–12:00",
-                  "12:00–1:00",
-                  "1:00–2:00",
-                  "2:00–3:00",
-                  "3:00–4:00",
-                ]}
-              />
-            </div>
-            )}
+              <div ref={tableRef} className="overflow-x-auto mt-6">
+                <table className="border-collapse border border-gray-400 w-full text-center">
+                  <thead className="bg-green-100">
+                    <tr>
+                      <th className="border border-gray-400 p-2 w-28">Day</th>
+                      {timeSlots.map((slot) => (
+                        <th
+                          key={slot}
+                          className="border border-gray-400 p-2 text-sm font-semibold text-gray-700"
+                        >
+                          {slot}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {days.map((day, dayIndex) => (
+                      <tr key={day}>
+                        <td className="border border-gray-400 p-2 font-semibold bg-gray-50">
+                          {day}
+                        </td>
 
+                        {timeSlots.map((slot, slotIndex) => {
+                          if (slot === "1:00–2:00") {
+                            if (dayIndex === 0)
+                              return (
+                                <td
+                                  key="lunch"
+                                  rowSpan={days.length}
+                                  className="border border-gray-400 bg-yellow-100 font-semibold text-gray-800 text-center align-middle"
+                                >
+                                  🍱 LUNCH BREAK
+                                </td>
+                              );
+                            return null;
+                          }
+
+                          // 🧩 Find a lab that starts here
+                          const lab = filteredTimetable.find(
+                            (t) =>
+                              t.day?.toLowerCase() === day.toLowerCase() &&
+                              t.type === "P" &&
+                              t.time_slot?.startsWith(slot)
+                          );
+
+                          // 🧩 Handle 2-hour labs (example: 9:00–11:00 or 2:00–4:00)
+                          if (lab) {
+                            const subj = lab.subject;
+                            const mergedRooms = filteredTimetable
+                              .filter(
+                                (l) =>
+                                  l.day?.toLowerCase() === day.toLowerCase() &&
+                                  l.subject === subj &&
+                                  l.time_slot === lab.time_slot
+                              )
+                              .map(
+                                (l) =>
+                                  `${l.room}${l.batch ? ` (${l.batch})` : ""}`
+                              )
+                              .join(" | ");
+
+                            // Determine if lab spans 2 hours
+                            const duration =
+                              lab.time_slot.includes("–11:00") ||
+                              lab.time_slot.includes("–4:00") ||
+                              lab.time_slot.includes("–1:00")
+                                ? 2
+                                : 1;
+
+                            return (
+                              <td
+                                key={`${day}-${slot}-lab`}
+                                colSpan={duration}
+                                className="border border-gray-400 bg-green-50 font-semibold text-sm text-gray-800 p-2 whitespace-pre-line"
+                              >
+                                🧪 {subj}
+                                <br />
+                                {mergedRooms}
+                                <br />
+                                {lab.faculty}
+                                <br />
+                                Sec {lab.section} | Sem {lab.year}
+                              </td>
+                            );
+                          }
+
+                          // 🧩 If this slot is already covered by a 2-hour lab, skip
+                          const overlappingLab = filteredTimetable.find(
+                            (t) =>
+                              t.day?.toLowerCase() === day.toLowerCase() &&
+                              t.type === "P" &&
+                              t.time_slot?.includes(slot) &&
+                              !t.time_slot?.startsWith(slot)
+                          );
+                          if (overlappingLab) return null;
+
+                          // 🧩 Theory Subjects
+                          // 🧩 Theory / Tutorial / Lab (Single-Slot)
+                          const slotEntries = filteredTimetable.filter(
+                            (t) =>
+                              t.day?.toLowerCase() === day.toLowerCase() &&
+                              t.time_slot?.toLowerCase() === slot.toLowerCase()
+                          );
+
+                          if (slotEntries.length === 0) {
+                            return (
+                              <td
+                                key={`${day}-${slot}`}
+                                className="border border-gray-400 p-2 text-sm text-gray-700"
+                              >
+                                -
+                              </td>
+                            );
+                          }
+
+                          // Split static B1/B2 for tutorials and practicals
+                          let finalEntries = [];
+                          slotEntries.forEach((e) => {
+                            if (e.type === "P" || e.type === "T") {
+                              // Create two batches visually if both exist
+                              if (e.batch) {
+                                finalEntries.push(e);
+                              } else {
+                                finalEntries.push({ ...e, batch: "B1" });
+                                finalEntries.push({ ...e, batch: "B2" });
+                              }
+                            } else {
+                              finalEntries.push(e);
+                            }
+                          });
+
+                          return (
+                            <td
+                              key={`${day}-${slot}`}
+                              className="border border-gray-400 p-2 whitespace-pre-line text-sm font-medium text-gray-800"
+                            >
+                              {finalEntries.map((entry, idx) => (
+                                <div
+                                  key={idx}
+                                  className="mb-1 border-b border-gray-300 pb-1 last:border-0"
+                                >
+                                  <span className="block font-semibold text-gray-900">
+                                    {entry.subject_code || entry.subject} (
+                                    {entry.type}
+                                    {entry.batch ? ` - ${entry.batch}` : ""})
+                                  </span>
+                                  <span className="block text-gray-700">
+                                    {entry.faculty}
+                                  </span>
+                                  <span className="block text-gray-600">
+                                    {entry.room}
+                                  </span>
+                                  <span className="block text-gray-500">
+                                    Sec {entry.section} | Sem {entry.year}
+                                  </span>
+                                </div>
+                              ))}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {filteredTimetable.length > 0 && (
               <div className="text-right mt-4">

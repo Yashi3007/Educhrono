@@ -1,26 +1,20 @@
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import API from "../services/api";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
-const DashboardHOD = () => {
+const DashboardFaculty = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-
   const [timetable, setTimetable] = useState([]);
   const [filteredTimetable, setFilteredTimetable] = useState([]);
   const [loading, setLoading] = useState(false);
-
-  const [facultyList, setFacultyList] = useState([]);
   const [sectionList, setSectionList] = useState([]);
   const [semesterList, setSemesterList] = useState([]);
-
-  const [selectedFaculty, setSelectedFaculty] = useState("");
   const [selectedSection, setSelectedSection] = useState("");
   const [selectedSemester, setSelectedSemester] = useState("");
-
   const tableRef = useRef();
 
   const handleLogout = () => {
@@ -28,41 +22,40 @@ const DashboardHOD = () => {
     navigate("/");
   };
 
-  // 🔹 Fetch Timetable
-  const handleViewTimetable = async () => {
-    setLoading(true);
+  // 🔹 Fetch faculty timetable
+  const fetchTimetable = async () => {
+    if (!user?.name) return;
     try {
-      const res = await API.get("/timetable/list");
-      const data = res.data.data || [];
-
+      setLoading(true);
+      const res = await API.get(`/timetable/faculty/${user.name}`);
+      const data = res.data.timetable || [];
       setTimetable(data);
       setFilteredTimetable(data);
-
-      setSectionList([...new Set(data.map((r) => r.section))]);
-      setFacultyList([...new Set(data.map((r) => r.faculty))]);
-      setSemesterList([...new Set(data.map((r) => r.year))]);
+      setSectionList([...new Set(data.map((t) => t.section))]);
+      setSemesterList([...new Set(data.map((t) => t.year))]);
     } catch (err) {
-      alert(err.response?.data?.detail || "Unable to fetch timetable");
+      console.error("Error fetching timetable:", err);
       setTimetable([]);
-      setFilteredTimetable([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // 🔹 Filter Logic
+  useEffect(() => {
+    fetchTimetable();
+  }, [user]);
+
+  // 🔹 Apply filters
   useEffect(() => {
     let filtered = timetable;
-
-    if (selectedFaculty)
-      filtered = filtered.filter((t) => t.faculty === selectedFaculty);
     if (selectedSection)
       filtered = filtered.filter((t) => t.section === selectedSection);
     if (selectedSemester)
-      filtered = filtered.filter((t) => String(t.year) === String(selectedSemester));
-
+      filtered = filtered.filter(
+        (t) => String(t.year) === String(selectedSemester)
+      );
     setFilteredTimetable(filtered);
-  }, [selectedFaculty, selectedSection, selectedSemester, timetable]);
+  }, [selectedSection, selectedSemester, timetable]);
 
   const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const timeSlots = [
@@ -75,6 +68,7 @@ const DashboardHOD = () => {
     "3:00–4:00",
   ];
 
+  // 📄 Download timetable as PDF
 const downloadPDF = async () => {
   const input = tableRef.current;
   if (!input) return;
@@ -179,7 +173,7 @@ const downloadPDF = async () => {
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-semibold text-blue-700">
-          HOD Dashboard – {user?.name}
+          Faculty Dashboard – {user?.name}
         </h1>
         <button
           onClick={handleLogout}
@@ -192,7 +186,9 @@ const downloadPDF = async () => {
       {/* Timetable Section */}
       <div className="bg-white shadow rounded-xl p-6">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-medium">📅 Department Timetable</h2>
+          <h2 className="text-lg font-medium text-gray-800">
+            📅 My Teaching Schedule
+          </h2>
           {filteredTimetable.length > 0 && (
             <button
               onClick={downloadPDF}
@@ -204,28 +200,9 @@ const downloadPDF = async () => {
         </div>
 
         <div className="flex flex-wrap gap-4 mb-4">
-          <button
-            onClick={handleViewTimetable}
-            className="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-md"
-          >
-            Load Timetable
-          </button>
-
           {timetable.length > 0 && (
             <>
-              <select
-                value={selectedFaculty}
-                onChange={(e) => setSelectedFaculty(e.target.value)}
-                className="border px-3 py-2 rounded-md text-gray-700"
-              >
-                <option value="">All Faculty</option>
-                {facultyList.map((f, i) => (
-                  <option key={i} value={f}>
-                    {f}
-                  </option>
-                ))}
-              </select>
-
+              {/* Section Filter */}
               <select
                 value={selectedSection}
                 onChange={(e) => setSelectedSection(e.target.value)}
@@ -239,6 +216,7 @@ const downloadPDF = async () => {
                 ))}
               </select>
 
+              {/* Semester Filter */}
               <select
                 value={selectedSemester}
                 onChange={(e) => setSelectedSemester(e.target.value)}
@@ -281,7 +259,8 @@ const downloadPDF = async () => {
                       {day}
                     </td>
 
-                    {timeSlots.map((slot, slotIndex) => {
+                    {timeSlots.map((slot) => {
+                      // 🍱 Lunch Break Column
                       if (slot === "1:00–2:00") {
                         if (dayIndex === 0)
                           return (
@@ -296,7 +275,7 @@ const downloadPDF = async () => {
                         return null;
                       }
 
-                      // 🧩 Handle Labs (2-hour span)
+                      // 🧪 Detect Lab (2 hr)
                       const lab = filteredTimetable.find(
                         (t) =>
                           t.day?.toLowerCase() === day.toLowerCase() &&
@@ -337,14 +316,12 @@ const downloadPDF = async () => {
                             <br />
                             {mergedRooms}
                             <br />
-                            {lab.faculty}
-                            <br />
                             Sec {lab.section} | Sem {lab.year}
                           </td>
                         );
                       }
 
-                      // 🧩 Lecture / Tutorial slots
+                      // Regular or Tutorial
                       const slotEntries = filteredTimetable.filter(
                         (t) =>
                           t.day?.toLowerCase() === day.toLowerCase() &&
@@ -361,7 +338,7 @@ const downloadPDF = async () => {
                           </td>
                         );
 
-                      // Split B1/B2 for T
+                      // Split B1/B2 tutorials
                       let finalEntries = [];
                       slotEntries.forEach((e) => {
                         if (e.type === "T") {
@@ -385,7 +362,6 @@ const downloadPDF = async () => {
                                 : entry.type === "T"
                                 ? "bg-blue-50"
                                 : "bg-white";
-
                             return (
                               <div
                                 key={idx}
@@ -397,9 +373,6 @@ const downloadPDF = async () => {
                                 </span>
                                 <span className="block text-gray-700">
                                   {entry.room}
-                                </span>
-                                <span className="block text-gray-700">
-                                  {entry.faculty}
                                 </span>
                                 <span className="block text-gray-500">
                                   Sec {entry.section} | Sem {entry.year}
@@ -416,13 +389,9 @@ const downloadPDF = async () => {
             </table>
           </div>
         )}
-
-        {!loading && filteredTimetable.length === 0 && (
-          <p className="text-gray-500 mt-4">No timetable data available yet.</p>
-        )}
       </div>
     </div>
   );
 };
 
-export default DashboardHOD;
+export default DashboardFaculty;
