@@ -13,7 +13,7 @@ def generate_timetable():
         days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
         time_slots = [
             "9:00–10:00", "10:00–11:00", "11:00–12:00",
-            "12:00–1:00", "2:00–3:00", "3:00–4:00"
+            "12:00–1:00", "2:00–3:00", "3:00–4:00", "4:00–5:00"
         ]
         lunch_slot = "1:00–2:00"
 
@@ -28,7 +28,7 @@ def generate_timetable():
         if not lecture_rooms:
             lecture_rooms = ["CSE-101", "CSE-102", "CSE-103"]
         if not lab_rooms:
-            lab_rooms = ["CSE-LAB1", "CSE-LAB2", "CSE-LAB3"]
+            lab_rooms = ["CSE-LAB1", "CSE-LAB2", "CSE-LAB3", "CSE-LAB4"]
 
         timetable = []
         placed_counter = defaultdict(lambda: {"L": 0, "T": 0, "P": 0, "COE": 0, "PDP": 0})
@@ -44,15 +44,12 @@ def generate_timetable():
                 if entry["day"] != day:
                     continue
                 existing_slots = set(parse_slots(entry["time_slot"]))
+                # Prevent overlap with same faculty or section
                 if new_slots & existing_slots:
                     if entry["faculty"] == faculty or entry["section"] == section:
                         return True
+                # Prevent same subject duplication on same day
                 if entry["subject"] == subject and entry["day"] == day:
-                    return True
-                if (
-                    (entry["type"] == "PDP" and subject == "COMMUNICATION & ETHICS")
-                    or (entry["type"] == "COE" and subject == "PROFESSIONAL DEVELOPMENT PROGRAM")
-                ) and entry["day"] == day:
                     return True
             return False
 
@@ -62,24 +59,9 @@ def generate_timetable():
                 ("10:00–11:00", "11:00–12:00"),
                 ("11:00–12:00", "12:00–1:00"),
                 ("2:00–3:00", "3:00–4:00"),
+                ("3:00–4:00", "4:00–5:00"),
             ]
             return random.choice(pairs)
-
-        def available_day_slot(cls_type):
-            if cls_type == "COE":
-                return random.choice([
-                    ("2:00–3:00", "3:00–4:00"),
-                    ("11:00–12:00", "12:00–1:00")
-                ])
-            elif cls_type == "PDP":
-                # Try single hours first, fallback later
-                return random.choice([
-                    ("9:00–10:00", "10:00–11:00"),
-                    ("11:00–12:00", "12:00–1:00"),
-                    ("2:00–3:00", "3:00–4:00")
-                ])
-            else:
-                return choose_two_hour_block()
 
         grouped = {}
         for row in teaching_load:
@@ -98,37 +80,38 @@ def generate_timetable():
                 L, T, P, COE, PDP = (int(subj_row.get(k, 0)) for k in ["L", "T", "P", "COE", "PDP"])
                 expected_counter[subj] = {"L": L, "T": T, "P": P, "COE": COE, "PDP": PDP}
 
-                # ---------- General Class Placement ----------
+                # ---------- Class Placement ----------
                 def place_class(cls_type, total_count):
                     for _ in range(total_count):
                         placed = False
-                        for _ in range(600):
+                        for _ in range(800):
                             day = random.choice(days)
-                            if cls_type in ["T", "P", "COE", "PDP"]:
-                                s1, s2 = available_day_slot(cls_type)
+                            # ⏱ Duration rules
+                            if cls_type in ["P", "COE"]:
+                                s1, s2 = choose_two_hour_block()
                                 slot = f"{s1}+{s2}"
                             else:
-                                slot = random.choice(time_slots[:4])
+                                slot = random.choice(time_slots)
+
                             if lunch_slot in parse_slots(slot):
                                 continue
                             if is_conflict(faculty, section, day, slot, subj):
                                 continue
-                            room_choice = random.choice(
-                                lab_rooms if cls_type in ["T", "P", "COE"] else lecture_rooms
-                            )
 
-                            # Regular placement
-                            if cls_type in ["L", "COE"]:
-                                timetable.append({
-                                    "faculty": faculty, "faculty_code": fcode,
-                                    "subject": subj, "department": dept,
-                                    "room": room_choice, "day": day,
-                                    "time_slot": slot, "year": sem,
-                                    "section": section, "type": cls_type,
-                                    "createdAt": datetime.utcnow(),
-                                })
-                            elif cls_type in ["T", "P"]:
-                                # Group A1/A2 split with different faculty if possible
+                            # 🏫 Room assignment based on type
+                            if cls_type in ["L", "T", "PDP"]:
+                                room_source = lecture_rooms
+                            else:  # P, COE
+                                room_source = lab_rooms
+
+                            # 🧩 Batch-wise handling
+                            if cls_type in ["T", "P"]:
+                                # Select 2 different rooms for A1/A2
+                                if len(room_source) >= 2:
+                                    room_a1, room_a2 = random.sample(room_source, 2)
+                                else:
+                                    room_a1 = room_a2 = random.choice(room_source)
+
                                 all_TP = [s for s in subjects if int(s.get(cls_type, 0)) > 0]
                                 alt_subj_row = random.choice(
                                     [s for s in all_TP if s["Subject_Name"].strip().upper() != subj]
@@ -140,7 +123,7 @@ def generate_timetable():
                                 timetable.append({
                                     "faculty": faculty, "faculty_code": fcode,
                                     "subject": subj, "department": dept,
-                                    "room": room_choice, "day": day,
+                                    "room": room_a1, "day": day,
                                     "time_slot": slot, "year": sem,
                                     "section": section, "batch": f"{section}-1",
                                     "type": cls_type, "createdAt": datetime.utcnow(),
@@ -148,87 +131,65 @@ def generate_timetable():
                                 timetable.append({
                                     "faculty": alt_fac, "faculty_code": alt_code,
                                     "subject": alt_subj, "department": dept,
-                                    "room": room_choice, "day": day,
+                                    "room": room_a2, "day": day,
                                     "time_slot": slot, "year": sem,
                                     "section": section, "batch": f"{section}-2",
                                     "type": cls_type, "createdAt": datetime.utcnow(),
                                 })
+                            else:
+                                # Single group classes (L, COE, PDP)
+                                room_choice = random.choice(room_source)
+                                timetable.append({
+                                    "faculty": faculty, "faculty_code": fcode,
+                                    "subject": subj, "department": dept,
+                                    "room": room_choice, "day": day,
+                                    "time_slot": slot, "year": sem,
+                                    "section": section, "type": cls_type,
+                                    "createdAt": datetime.utcnow(),
+                                })
+
                             placed_counter[subj][cls_type] += 1
                             placed = True
                             break
                         if not placed:
                             print(f"⚠️ Could not place {cls_type} for {subj}")
 
-                # ---------- PDP Special Placement ----------
+                # ---------- PDP Placement ----------
                 def place_pdp_class(total_count):
-                    for _ in range(total_count):
-                        placed = False
-                        for _ in range(800):
-                            day = random.choice(days)
-                            # Try single-hour first
-                            slot = random.choice(time_slots[:4])
-                            if lunch_slot in parse_slots(slot):
-                                continue
-                            if is_conflict(faculty, section, day, slot, subj):
-                                # try fallback 2-hour
-                                s1, s2 = available_day_slot("PDP")
-                                slot = f"{s1}+{s2}"
-                                if is_conflict(faculty, section, day, slot, subj):
-                                    continue
-                            room_choice = random.choice(lecture_rooms)
-                            timetable.append({
-                                "faculty": faculty, "faculty_code": fcode,
-                                "subject": subj, "department": dept,
-                                "room": room_choice, "day": day,
-                                "time_slot": slot, "year": sem,
-                                "section": section, "type": "PDP",
-                                "createdAt": datetime.utcnow(),
-                            })
-                            placed_counter[subj]["PDP"] += 1
-                            placed = True
-                            break
-                        if not placed:
-                            print(f"⚠️ Could not place PDP for {subj}")
+                    placed_days = set()
+                    attempts = 0
+                    while len(placed_days) < total_count and attempts < 600:
+                        attempts += 1
+                        day = random.choice(days)
+                        if day in placed_days:
+                            continue
+                        slot = random.choice(time_slots)
+                        if lunch_slot in parse_slots(slot):
+                            continue
+                        if is_conflict(faculty, section, day, slot, subj):
+                            continue
+                        room_choice = random.choice(lecture_rooms)
+                        timetable.append({
+                            "faculty": faculty, "faculty_code": fcode,
+                            "subject": subj, "department": dept,
+                            "room": room_choice, "day": day,
+                            "time_slot": slot, "year": sem,
+                            "section": section, "type": "PDP",
+                            "createdAt": datetime.utcnow(),
+                        })
+                        placed_days.add(day)
+                        placed_counter[subj]["PDP"] += 1
+                    if len(placed_days) < total_count:
+                        print(f"⚠️ Only placed {len(placed_days)} of {total_count} PDP classes for {subj}")
 
-                # ---------- Place Classes ----------
+                # ---------- Place All ----------
                 place_class("L", L)
                 place_class("T", T)
                 place_class("P", P)
                 place_class("COE", COE)
                 place_pdp_class(PDP)
 
-        # ---------------- Retry for Missing ----------------
-        for attempt in range(1, 6):
-            missing = []
-            for subj, exp in expected_counter.items():
-                for key in exp:
-                    if placed_counter[subj][key] < exp[key]:
-                        missing.append((subj, key, exp[key] - placed_counter[subj][key]))
-            if not missing:
-                break
-            print(f"\n🔁 Retry Attempt {attempt}/5 for missing entries:")
-            for subj, cls_type, remaining in missing:
-                print(f"⏳ Retrying {cls_type} for {subj} ({remaining} left)")
-                for _ in range(remaining):
-                    for _ in range(400):
-                        day = random.choice(days)
-                        s1, s2 = available_day_slot(cls_type)
-                        slot = f"{s1}+{s2}"
-                        room_choice = random.choice(
-                            lab_rooms if cls_type in ["T", "P", "COE"] else lecture_rooms
-                        )
-                        if is_conflict("AutoAssign", "A", day, slot, subj):
-                            continue
-                        timetable.append({
-                            "faculty": "AutoAssign", "faculty_code": "AUTO",
-                            "subject": subj, "department": "CSE", "room": room_choice,
-                            "day": day, "time_slot": slot, "year": 3,
-                            "section": "A", "type": cls_type, "createdAt": datetime.utcnow()
-                        })
-                        placed_counter[subj][cls_type] += 1
-                        break
-
-        # ---------------- Final Save ----------------
+        # ---------------- Save to DB ----------------
         unique = {
             (t["faculty"], t["subject"], t["section"], t["day"], t["time_slot"], t.get("batch", "")): t
             for t in timetable
@@ -238,7 +199,6 @@ def generate_timetable():
 
         print(f"\n✅ Successfully generated {len(timetable)} entries.")
         print("\n📊 Subject-wise Comparison (Expected vs Placed):")
-        print("------------------------------------------------------------")
         for subj, exp in expected_counter.items():
             placed = placed_counter[subj]
             print(f"{subj:<35} | "

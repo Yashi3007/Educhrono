@@ -73,7 +73,7 @@ const TimetableTable = ({ timetable, days, timeSlots }) => {
                       normalizeTime(slot)
                     ) &&
                     (t.time_slot?.includes("+") ||
-                      ["P", "T", "COE"].includes(t.type))
+                      ["P", "COE"].includes(t.type))
                 );
 
                 // 🎯 Render merged 2-hour cell
