@@ -1,215 +1,360 @@
-from datetime import datetime
-import random
 from app import db
-from collections import defaultdict
+import random
 
+# ============================================
+# CONSTANTS
+# ============================================
 
+DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+TIME_SLOTS = [
+    "09:00-10:00",
+    "10:00-11:00",
+    "11:00-12:00",
+    "12:00-13:00",   # last slot before lunch (NO 2-hour block can start here)
+    "14:00-15:00",
+    "15:00-16:00",
+    "16:00-17:00"
+]
+
+# ============================================
+# GROUP SPLIT → A → A1, A2
+# ============================================
+def generate_groups(section):
+    return [f"{section}1", f"{section}2"]
+
+# ============================================
+# Utility: Get faculty for specific subject
+# ============================================
+def get_faculty_for_subject(sem, sec, subject):
+    rec = db["teaching_load"].find_one(
+        {"Semester": sem, "Section": sec, "Subject_Name": subject},
+        {"Faculty_Name": 1, "_id": 0}
+    )
+    return rec["Faculty_Name"] if rec else ""
+
+# ============================================
+# MAIN GENERATOR
+# ============================================
 def generate_timetable():
-    try:
-        db["timetable"].delete_many({})
-        print("🧹 Cleared old timetable data")
 
-        random.seed(42)
-        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-        time_slots = [
-            "9:00–10:00", "10:00–11:00", "11:00–12:00",
-            "12:00–1:00", "2:00–3:00", "3:00–4:00", "4:00–5:00"
+    teaching_load = list(db["teaching_load"].find({}, {"_id": 0}))
+    room_list = list(db["room_list"].find({}, {"_id": 0}))
+
+    if not teaching_load:
+        return {"success": False, "message": "Teaching load empty"}
+
+    if not room_list:
+        return {"success": False, "message": "Room list empty"}
+
+    db["timetable"].delete_many({})
+
+    timetable = []
+    faculty_busy = {}
+    section_busy = {}
+    subject_used_daily = {}
+
+    # ============================================
+    # ROOMS
+    # ============================================
+    fixed_rooms = {}
+    labs = []
+
+    for r in room_list:
+        if r["Room_Type"] == "Room" and r["Assigned_Semester"]:
+            fixed_rooms[(r["Assigned_Semester"], r["Assigned_Section"])] = r["Room_No"]
+
+        if r["Room_Type"] == "Lab":
+            labs.append(r["Room_No"])
+
+    # ============================================
+    # SUBJECT SPLIT (Exclude PDP & COE)
+    # ============================================
+    group_subject_map = {}
+    unique_sections = set((t["Semester"], t["Section"]) for t in teaching_load)
+
+    for (sem, sec) in unique_sections:
+
+        all_subjects = [
+            t["Subject_Name"]
+            for t in teaching_load
+            if t["Semester"] == sem and t["Section"] == sec
         ]
-        lunch_slot = "1:00–2:00"
 
-        teaching_load = list(db["teaching_load"].find({}, {"_id": 0}))
-        if not teaching_load:
-            return {"success": False, "status": "No teaching load data"}
+        subjects = [
+            s for s in all_subjects
+            if "personality" not in s.lower()
+            and "centre" not in s.lower()
+            and "center" not in s.lower()
+        ]
 
-        room_list = list(db["room_list"].find({}, {"_id": 0}))
-        lab_list = list(db["lab_list"].find({}, {"_id": 0}))
-        lecture_rooms = [r["Room_No"] for r in room_list if "Room" in r.get("Room_Type", "")]
-        lab_rooms = [l["Lab_No"] for l in lab_list]
-        if not lecture_rooms:
-            lecture_rooms = ["CSE-101", "CSE-102", "CSE-103"]
-        if not lab_rooms:
-            lab_rooms = ["CSE-LAB1", "CSE-LAB2", "CSE-LAB3", "CSE-LAB4"]
+        random.shuffle(subjects)
+        mid = len(subjects) // 2 or 1
 
-        timetable = []
-        placed_counter = defaultdict(lambda: {"L": 0, "T": 0, "P": 0, "COE": 0, "PDP": 0})
-        expected_counter = defaultdict(lambda: {"L": 0, "T": 0, "P": 0, "COE": 0, "PDP": 0})
-
-        # ---------------- Helper Functions ----------------
-        def parse_slots(slot):
-            return slot.split('+') if '+' in slot else [slot]
-
-        def is_conflict(faculty, section, day, slot, subject):
-            new_slots = set(parse_slots(slot))
-            for entry in timetable:
-                if entry["day"] != day:
-                    continue
-                existing_slots = set(parse_slots(entry["time_slot"]))
-                # Prevent overlap with same faculty or section
-                if new_slots & existing_slots:
-                    if entry["faculty"] == faculty or entry["section"] == section:
-                        return True
-                # Prevent same subject duplication on same day
-                if entry["subject"] == subject and entry["day"] == day:
-                    return True
-            return False
-
-        def choose_two_hour_block():
-            pairs = [
-                ("9:00–10:00", "10:00–11:00"),
-                ("10:00–11:00", "11:00–12:00"),
-                ("11:00–12:00", "12:00–1:00"),
-                ("2:00–3:00", "3:00–4:00"),
-                ("3:00–4:00", "4:00–5:00"),
-            ]
-            return random.choice(pairs)
-
-        grouped = {}
-        for row in teaching_load:
-            key = (row["Semester"], row["Section"].strip().upper())
-            grouped.setdefault(key, []).append(row)
-
-        # ---------------- Main Logic ----------------
-        for (sem, section), subjects in grouped.items():
-            print(f"\n🧾 Generating timetable for Sem {sem}, Section {section}")
-
-            for subj_row in subjects:
-                subj = subj_row["Subject_Name"].strip().upper()
-                faculty = subj_row["Faculty_Name"]
-                fcode = subj_row["Faculty_Code"]
-                dept = subj_row["Department"]
-                L, T, P, COE, PDP = (int(subj_row.get(k, 0)) for k in ["L", "T", "P", "COE", "PDP"])
-                expected_counter[subj] = {"L": L, "T": T, "P": P, "COE": COE, "PDP": PDP}
-
-                # ---------- Class Placement ----------
-                def place_class(cls_type, total_count):
-                    for _ in range(total_count):
-                        placed = False
-                        for _ in range(800):
-                            day = random.choice(days)
-                            # ⏱ Duration rules
-                            if cls_type in ["P", "COE"]:
-                                s1, s2 = choose_two_hour_block()
-                                slot = f"{s1}+{s2}"
-                            else:
-                                slot = random.choice(time_slots)
-
-                            if lunch_slot in parse_slots(slot):
-                                continue
-                            if is_conflict(faculty, section, day, slot, subj):
-                                continue
-
-                            # 🏫 Room assignment based on type
-                            if cls_type in ["L", "T", "PDP"]:
-                                room_source = lecture_rooms
-                            else:  # P, COE
-                                room_source = lab_rooms
-
-                            # 🧩 Batch-wise handling
-                            if cls_type in ["T", "P"]:
-                                # Select 2 different rooms for A1/A2
-                                if len(room_source) >= 2:
-                                    room_a1, room_a2 = random.sample(room_source, 2)
-                                else:
-                                    room_a1 = room_a2 = random.choice(room_source)
-
-                                all_TP = [s for s in subjects if int(s.get(cls_type, 0)) > 0]
-                                alt_subj_row = random.choice(
-                                    [s for s in all_TP if s["Subject_Name"].strip().upper() != subj]
-                                ) if len(all_TP) > 1 else subj_row
-                                alt_subj = alt_subj_row["Subject_Name"].strip().upper()
-                                alt_fac = alt_subj_row["Faculty_Name"]
-                                alt_code = alt_subj_row["Faculty_Code"]
-
-                                timetable.append({
-                                    "faculty": faculty, "faculty_code": fcode,
-                                    "subject": subj, "department": dept,
-                                    "room": room_a1, "day": day,
-                                    "time_slot": slot, "year": sem,
-                                    "section": section, "batch": f"{section}-1",
-                                    "type": cls_type, "createdAt": datetime.utcnow(),
-                                })
-                                timetable.append({
-                                    "faculty": alt_fac, "faculty_code": alt_code,
-                                    "subject": alt_subj, "department": dept,
-                                    "room": room_a2, "day": day,
-                                    "time_slot": slot, "year": sem,
-                                    "section": section, "batch": f"{section}-2",
-                                    "type": cls_type, "createdAt": datetime.utcnow(),
-                                })
-                            else:
-                                # Single group classes (L, COE, PDP)
-                                room_choice = random.choice(room_source)
-                                timetable.append({
-                                    "faculty": faculty, "faculty_code": fcode,
-                                    "subject": subj, "department": dept,
-                                    "room": room_choice, "day": day,
-                                    "time_slot": slot, "year": sem,
-                                    "section": section, "type": cls_type,
-                                    "createdAt": datetime.utcnow(),
-                                })
-
-                            placed_counter[subj][cls_type] += 1
-                            placed = True
-                            break
-                        if not placed:
-                            print(f"⚠️ Could not place {cls_type} for {subj}")
-
-                # ---------- PDP Placement ----------
-                def place_pdp_class(total_count):
-                    placed_days = set()
-                    attempts = 0
-                    while len(placed_days) < total_count and attempts < 600:
-                        attempts += 1
-                        day = random.choice(days)
-                        if day in placed_days:
-                            continue
-                        slot = random.choice(time_slots)
-                        if lunch_slot in parse_slots(slot):
-                            continue
-                        if is_conflict(faculty, section, day, slot, subj):
-                            continue
-                        room_choice = random.choice(lecture_rooms)
-                        timetable.append({
-                            "faculty": faculty, "faculty_code": fcode,
-                            "subject": subj, "department": dept,
-                            "room": room_choice, "day": day,
-                            "time_slot": slot, "year": sem,
-                            "section": section, "type": "PDP",
-                            "createdAt": datetime.utcnow(),
-                        })
-                        placed_days.add(day)
-                        placed_counter[subj]["PDP"] += 1
-                    if len(placed_days) < total_count:
-                        print(f"⚠️ Only placed {len(placed_days)} of {total_count} PDP classes for {subj}")
-
-                # ---------- Place All ----------
-                place_class("L", L)
-                place_class("T", T)
-                place_class("P", P)
-                place_class("COE", COE)
-                place_pdp_class(PDP)
-
-        # ---------------- Save to DB ----------------
-        unique = {
-            (t["faculty"], t["subject"], t["section"], t["day"], t["time_slot"], t.get("batch", "")): t
-            for t in timetable
+        group_subject_map[(sem, sec)] = {
+            "G1": subjects[:mid],
+            "G2": subjects[mid:]
         }
-        timetable = list(unique.values())
+
+    # ============================================
+    # HELPERS
+    # ============================================
+    def mark_busy(sem, sec, subgroups, faculty, day, slots):
+        for slot in slots:
+            faculty_busy[(faculty, day, slot)] = True
+            section_busy[(sem, sec, day, slot)] = True
+            for sg in subgroups:
+                section_busy[(sem, sg, day, slot)] = True
+
+    def is_free(sem, sec, subgroups, faculty, day, slots):
+        for slot in slots:
+            if faculty_busy.get((faculty, day, slot)):
+                return False
+            if section_busy.get((sem, sec, day, slot)):
+                return False
+            for sg in subgroups:
+                if section_busy.get((sem, sg, day, slot)):
+                    return False
+        return True
+
+    # ============================================
+    # SINGLE SLOT (L, PDP)
+    # ============================================
+    def place_single(sem, sec, faculty, subject, type_name, room):
+
+        daily = subject_used_daily.setdefault((sem, sec), {})
+
+        for day in DAYS:
+
+            # PDP & COE cannot be on same day
+            if type_name == "PDP" and "COE" in daily.get(day, set()):
+                continue
+            if type_name == "COE" and "PDP" in daily.get(day, set()):
+                continue
+
+            used_today = daily.setdefault(day, set())
+            if subject in used_today:
+                continue
+
+            for slot in TIME_SLOTS:
+
+                if not is_free(sem, sec, [], faculty, day, [slot]):
+                    continue
+
+                timetable.append({
+                    "Semester": sem,
+                    "Section": sec,
+                    "Subject": subject,
+                    "Faculty": faculty,
+                    "Type": type_name,
+                    "Day": day,
+                    "Slot": slot,
+                    "Room": room
+                })
+
+                mark_busy(sem, sec, [], faculty, day, [slot])
+                used_today.add(subject)
+                return True
+
+        return False
+
+    # ============================================
+    # TWO HOUR BLOCK (T / P)
+    # ============================================
+    def place_two_hour(sem, sec, type_name,
+                       subject1, subject2, faculty1, faculty2,
+                       g1, g2, room1, room2):
+
+        daily = subject_used_daily.setdefault((sem, sec), {})
+
+        for day in DAYS:
+
+            if type_name == "PDP" and "COE" in daily.get(day, set()):
+                continue
+            if type_name == "COE" and "PDP" in daily.get(day, set()):
+                continue
+
+            used_today = daily.setdefault(day, set())
+            if subject1 in used_today or subject2 in used_today:
+                continue
+
+            for i in range(len(TIME_SLOTS) - 1):
+
+                s1 = TIME_SLOTS[i]
+                s2 = TIME_SLOTS[i + 1]
+
+                # ❗ PREVENT 2-hour block starting at 12:00–13:00
+                if s1 == "12:00-13:00":
+                    continue
+
+                # ensure free
+                if not is_free(sem, sec, [g1, g2], faculty1, day, [s1, s2]):
+                    continue
+                if not is_free(sem, sec, [g1, g2], faculty2, day, [s1, s2]):
+                    continue
+
+                # Save
+                timetable.append({
+                    "Semester": sem,
+                    "Section": sec,
+                    "Type": type_name,
+                    "Day": day,
+                    "Slot": s1,
+                    "Slot2": s2,
+                    "Groups": [
+                        {
+                            "group": g1,
+                            "subject": subject1,
+                            "faculty": faculty1,
+                            "room": room1,
+                            "type": type_name
+                        },
+                        {
+                            "group": g2,
+                            "subject": subject2,
+                            "faculty": faculty2,
+                            "room": room2,
+                            "type": type_name
+                        }
+                    ]
+                })
+
+                mark_busy(sem, sec, [g1, g2], faculty1, day, [s1, s2])
+                mark_busy(sem, sec, [g1, g2], faculty2, day, [s1, s2])
+
+                used_today.add(subject1)
+                used_today.add(subject2)
+                daily[day].add(type_name)
+                return True
+
+        return False
+
+    # ============================================
+    # COE (NO GROUP SPLIT – 2 HOUR BLOCK)
+    # ============================================
+    def place_coe(sem, sec, subject, faculty, class_room):
+
+        daily = subject_used_daily.setdefault((sem, sec), {})
+
+        for day in DAYS:
+
+            if "PDP" in daily.get(day, set()):
+                continue
+
+            used_today = daily.setdefault(day, set())
+            if subject in used_today:
+                continue
+
+            for i in range(len(TIME_SLOTS) - 1):
+
+                s1 = TIME_SLOTS[i]
+                s2 = TIME_SLOTS[i + 1]
+
+                # ❗ COE also cannot overlap lunch
+                if s1 == "12:00-13:00":
+                    continue
+
+                if faculty_busy.get((faculty, day, s1)): continue
+                if faculty_busy.get((faculty, day, s2)): continue
+                if section_busy.get((sem, sec, day, s1)): continue
+                if section_busy.get((sem, sec, day, s2)): continue
+
+                timetable.append({
+                    "Semester": sem,
+                    "Section": sec,
+                    "Type": "COE",
+                    "Subject": subject,
+                    "Faculty": faculty,
+                    "Day": day,
+                    "Slot": s1,
+                    "Slot2": s2,
+                    "Room": class_room
+                })
+
+                faculty_busy[(faculty, day, s1)] = True
+                faculty_busy[(faculty, day, s2)] = True
+
+                section_busy[(sem, sec, day, s1)] = True
+                section_busy[(sem, sec, day, s2)] = True
+
+                used_today.add(subject)
+                daily[day].add("COE")
+                return True
+
+        return False
+
+    # ============================================
+    # PROCESS LOAD
+    # ============================================
+    for t in teaching_load:
+
+        sem = t["Semester"]
+        sec = t["Section"]
+        subject = t["Subject_Name"]
+        faculty = t["Faculty_Name"]
+
+        L = t["L"]
+        T = t["T"]
+        P = t["P"]
+        PDP = t["PDP"]
+        COE = t["COE"]
+
+        g1, g2 = generate_groups(sec)
+
+        class_room = fixed_rooms.get((sem, sec), None)
+
+        g1subs = group_subject_map[(sem, sec)]["G1"]
+        g2subs = group_subject_map[(sem, sec)]["G2"]
+
+        # LECTURES
+        for _ in range(L):
+            place_single(sem, sec, faculty, subject, "L", class_room)
+
+        # PDP
+        for _ in range(PDP):
+            place_single(sem, sec, faculty, subject, "PDP", class_room)
+
+        # COE
+        for _ in range(COE):
+            place_coe(sem, sec, subject, faculty, class_room)
+
+        # TUTORIALS
+        for _ in range(T):
+
+            if not g1subs or not g2subs:
+                continue
+
+            s1 = random.choice(g1subs)
+            s2 = random.choice(g2subs)
+
+            f1 = get_faculty_for_subject(sem, sec, s1)
+            f2 = get_faculty_for_subject(sem, sec, s2)
+
+            room1, room2 = random.sample(labs, 2)
+
+            place_two_hour(sem, sec, "T",
+                           s1, s2, f1, f2,
+                           g1, g2, room1, room2)
+
+        # LABS
+        for _ in range(P):
+
+            if not g1subs or not g2subs:
+                continue
+
+            s1 = random.choice(g1subs)
+            s2 = random.choice(g2subs)
+
+            f1 = get_faculty_for_subject(sem, sec, s1)
+            f2 = get_faculty_for_subject(sem, sec, s2)
+
+            room1, room2 = random.sample(labs, 2)
+
+            place_two_hour(sem, sec, "P",
+                           s1, s2, f1, f2,
+                           g1, g2, room1, room2)
+
+    if timetable:
         db["timetable"].insert_many(timetable)
 
-        print(f"\n✅ Successfully generated {len(timetable)} entries.")
-        print("\n📊 Subject-wise Comparison (Expected vs Placed):")
-        for subj, exp in expected_counter.items():
-            placed = placed_counter[subj]
-            print(f"{subj:<35} | "
-                  f"L {placed['L']}/{exp['L']:<2} | "
-                  f"T {placed['T']}/{exp['T']:<2} | "
-                  f"P {placed['P']}/{exp['P']:<2} | "
-                  f"COE {placed['COE']}/{exp['COE']:<2} | "
-                  f"PDP {placed['PDP']}/{exp['PDP']:<2}")
-
-        return {"success": True, "count": len(timetable)}
-
-    except Exception as e:
-        print(f"❌ Error generating timetable: {e}")
-        return {"success": False, "status": str(e)}
+    return {"success": True, "count": len(timetable)}

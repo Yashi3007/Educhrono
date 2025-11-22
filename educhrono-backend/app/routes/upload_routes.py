@@ -88,7 +88,9 @@ def read_excel_with_mapping(file_bytes, file_type):
             "Room No": "Room_No",
             "Room Type": "Room_Type",
             "Capacity": "Capacity",
-            "Department": "Department"
+            "Department": "Department",
+            "Assigned_Semester": "Assigned_Semester",
+            "Assigned_Section": "Assigned_Section"
         },
         "lab-list": {
             "Lab No": "Lab_No",
