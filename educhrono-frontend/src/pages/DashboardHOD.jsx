@@ -41,29 +41,98 @@ const DashboardHOD = () => {
     setLoading(true);
     try {
       const res = await API.get("/timetable/list");
-      let data = res.data.data || [];
+      let data = res.data.timetable || [];
 
-      data = data.map((r) => ({
-        ...r,
-        faculty: r.faculty?.trim(),
-        section: r.section?.trim()?.toUpperCase()?.replace(/\s*\(B\d\)/gi, ""),
-        day: r.day?.trim(),
-        time_slot: r.time_slot?.trim(),
+      // 🌟 EXPANSION LOGIC (same as Admin)
+      let expanded = [];
+
+      data.forEach((item) => {
+        // Case 1: T/P (grouped)
+        if (item.Groups && Array.isArray(item.Groups)) {
+          item.Groups.forEach((g) => {
+            expanded.push({
+              faculty: g.faculty?.trim() || "",
+              subject: g.subject?.trim() || "",
+              section: g.group?.trim() || "",
+              day: item.Day?.trim() || "",
+              time_slot: item.Slot?.trim() || "",
+              slot2: item.Slot2?.trim() || "",
+              room: g.room || "",
+              type: item.Type || "",
+              year: item.Semester,
+              isGroupSplit: true,
+            });
+          });
+
+          // Do NOT push combined entry
+          return;
+        }
+
+        // Case 2: L / PDP / COE (non-group)
+        expanded.push({
+          faculty: item.Faculty?.trim() || "",
+          subject: item.Subject?.trim() || "",
+          section: item.Section?.trim() || "",
+          day: item.Day?.trim() || "",
+          time_slot: item.Slot?.trim() || "",
+          slot2: item.Slot2?.trim() || "",
+          room: item.Room || "",
+          type: item.Type || "",
+          year: item.Semester,
+        });
+      });
+
+      data = expanded;
+
+      // 🌟 TIME SLOT NORMALIZATION
+      const mapSlot = {
+        "09:00-10:00": "9:00–10:00",
+        "10:00-11:00": "10:00–11:00",
+        "11:00-12:00": "11:00–12:00",
+        "12:00-13:00": "12:00–1:00",
+        "13:00-14:00": "1:00–2:00",
+        "14:00-15:00": "2:00–3:00",
+        "15:00-16:00": "3:00–4:00",
+        "16:00-17:00": "4:00–5:00",
+      };
+
+      data = data.map((i) => ({
+        ...i,
+        time_slot: mapSlot[i.time_slot] || i.time_slot,
+        slot2: mapSlot[i.slot2] || i.slot2,
       }));
 
       setTimetable(data);
       setFilteredTimetable(data);
-      setFacultyList([...new Set(data.map((r) => r.faculty).filter(Boolean))]);
-      setSectionList([...new Set(data.map((r) => r.section).filter(Boolean))]);
-      setSemesterList([...new Set(data.map((r) => r.year).filter(Boolean))]);
+
+      // dropdowns
+      setFacultyList([...new Set(data.map((i) => i.faculty).filter(Boolean))]);
+      setSectionList([
+        ...new Set(
+          data
+            .map((i) =>
+              i.isGroupSplit
+                ? i.section.replace(/[0-9]/g, "").toUpperCase()  // A1 → A
+                : i.section?.replace(/[0-9]/g, "").toUpperCase()
+            )
+            .filter(Boolean)
+        )
+      ]);
+
+      setSemesterList([...new Set(data.map((i) => i.year))]);
+
+      setSelectedFaculty("");
+      setSelectedSection("");
+      setSelectedSemester("");
     } catch (err) {
-      console.error("Timetable fetch error:", err);
+      console.error("HOD timetable error:", err);
       setTimetable([]);
       setFilteredTimetable([]);
     } finally {
       setLoading(false);
     }
   };
+
 
   useEffect(() => {
     handleViewTimetable();
@@ -81,11 +150,10 @@ const DashboardHOD = () => {
       );
 
     if (selectedSection)
-      filtered = filtered.filter(
-        (t) =>
-          t.section?.replace(/\s+/g, "").toUpperCase() ===
-          selectedSection.replace(/\s+/g, "").toUpperCase()
-      );
+      filtered = filtered.filter((t) => {
+        const sec = t.section?.replace(/[0-9]/g, "").toUpperCase(); // A1 → A
+        return sec === selectedSection.toUpperCase();
+      });
 
     if (selectedSemester)
       filtered = filtered.filter(

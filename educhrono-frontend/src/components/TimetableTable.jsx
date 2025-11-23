@@ -8,7 +8,7 @@ const TimetableTable = ({ timetable, days, timeSlots }) => {
     T: { bg: "bg-blue-50", icon: "📘" },
     P: { bg: "bg-green-50", icon: "🧪" },
     COE: { bg: "bg-orange-50", icon: "🏛️" },
-    PDP: { bg: "bg-purple-50", icon: "🧠" },
+    PDP: { bg: "bg-purple-50", icon: "🧠" }
   };
 
   const getEntryAt = (day, slot) =>
@@ -50,7 +50,7 @@ const TimetableTable = ({ timetable, days, timeSlots }) => {
                   return null;
                 }
 
-                // LUNCH BREAK merged column
+                // LUNCH BREAK
                 if (slot === "1:00–2:00") {
                   if (dayIndex === 0) {
                     return (
@@ -67,37 +67,74 @@ const TimetableTable = ({ timetable, days, timeSlots }) => {
                 }
 
                 const entries = getEntryAt(day, slot);
-
-                if (entries.length === 0)
+                if (entries.length === 0) {
                   return (
-                    <td key={`${day}-${slot}`} className="border border-gray-400 text-gray-500">
+                    <td
+                      key={`${day}-${slot}`}
+                      className="border border-gray-400 text-gray-500"
+                    >
                       -
                     </td>
                   );
+                }
 
                 const e0 = entries[0];
 
-                // Detect 2-hour block (T/P/COE merged)
+                // =====================================================
+                // 🔥 DEBUG — Check exactly what COE data looks like
+                // =====================================================
+                if (e0.type === "COE") {
+                  console.log("CHECK COE ENTRY:", {
+                    type: e0.type,
+                    day,
+                    slot,
+                    time_slot: e0.time_slot,
+                    slot2: e0.slot2,
+                    entry: e0
+                  });
+                }
+
+                // =====================================================
+                // 🔶 PROPER COE MERGE
+                // =====================================================
+                const isCOEBlock =
+                  e0.type === "COE" &&
+                  e0.slot2 &&
+                  normalize(e0.slot2) === normalize(timeSlots[slotIndex + 1]);
+
+                if (isCOEBlock) {
+                  skipNext = true;
+                  const { bg, icon } = typeStyles["COE"];
+
+                  return (
+                    <td
+                      key={`${day}-${slot}-coe`}
+                      colSpan={2}
+                      className={`border border-gray-400 p-2 whitespace-pre-line ${bg}`}
+                    >
+                      <div className="rounded-md p-1">
+                        <span className="font-semibold text-gray-900">
+                          {icon} {e0.subject} -{e0.type}
+                        </span>
+                        <div className="text-gray-700">{e0.room}</div>
+                        <div className="text-gray-500 text-xs">{e0.faculty}</div>
+                      </div>
+                    </td>
+                  );
+                }
+
+                // =====================================================
+                // 🔵 T / P 2-HOUR BLOCK
+                // =====================================================
                 const isTwoHour =
-                  e0.type === "T" ||
-                  e0.type === "P" ||
-                  (e0.isGroupSplit === false &&
-                    e0.time_slot &&
-                    timetable.some(
-                      (x) =>
-                        x.time_slot === e0.time_slot &&
-                        x.section === e0.section &&
-                        x.type === e0.type &&
-                        x.slot2
-                    )) ||
-                  e0.slot2;
+                  (e0.type === "T" || e0.type === "P") &&
+                  normalize(timeSlots[slotIndex + 1]) === normalize(e0.slot2);
 
                 if (isTwoHour) {
                   skipNext = true;
+                  const { bg, icon } = typeStyles[e0.type];
 
-                  const { bg, icon } = typeStyles[e0.type] || {};
-
-                  // Grouped T/P — multiple entries inside
+                  // Grouped (A1/A2)
                   if (entries.every((a) => a.isGroupSplit)) {
                     return (
                       <td
@@ -111,26 +148,28 @@ const TimetableTable = ({ timetable, days, timeSlots }) => {
                             className="mb-1 border-b border-gray-300 pb-1 last:border-0 rounded-md p-1"
                           >
                             <span className="font-semibold text-gray-900">
-                              {icon} {e.subject} ({e.section})
+                              {icon} {e.subject} ({e.section}) -{e0.type}
                             </span>
                             <div className="text-gray-700">{e.room}</div>
-                            <div className="text-gray-500 text-xs">{e.faculty}</div>
+                            <div className="text-gray-500 text-xs">
+                              {e.faculty}
+                            </div>
                           </div>
                         ))}
                       </td>
                     );
                   }
 
-                  // Non-group 2-hour entries (COE, sometimes lab)
+                  // Single-block T/P
                   return (
                     <td
                       key={`${day}-${slot}-2h`}
                       colSpan={2}
                       className={`border border-gray-400 p-2 whitespace-pre-line ${bg}`}
                     >
-                      <div className="mb-1 rounded-md p-1">
+                      <div className="rounded-md p-1">
                         <span className="font-semibold text-gray-900">
-                          {icon} {e0.subject}
+                          {icon} {e0.subject} -{e0.type}
                         </span>
                         <div className="text-gray-700">{e0.room}</div>
                         <div className="text-gray-500 text-xs">{e0.faculty}</div>
@@ -139,7 +178,7 @@ const TimetableTable = ({ timetable, days, timeSlots }) => {
                   );
                 }
 
-                // Standard (1-hour) entries
+                // STANDARD 1-HOUR ENTRY
                 return (
                   <td
                     key={`${day}-${slot}`}
@@ -153,7 +192,7 @@ const TimetableTable = ({ timetable, days, timeSlots }) => {
                           className={`mb-1 border-b border-gray-300 pb-1 last:border-0 p-1 rounded-md ${bg}`}
                         >
                           <span className="font-semibold text-gray-900">
-                            {icon} {e.subject}
+                            {icon} {e.subject} -{e0.type}
                           </span>
                           <div className="text-gray-700">{e.room}</div>
                           <div className="text-gray-500 text-xs">{e.faculty}</div>
