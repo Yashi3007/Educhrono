@@ -215,7 +215,26 @@ export default function DashboardTimetable() {
       let expanded = [];
 
       data.forEach((item) => {
-        // Case 1: Grouped entries (T or P)
+        // Case 0: COE (Special exam block)
+        if (item.Type === "COE") {
+
+          expanded.push({
+            faculty: item.Faculty || "Exam Department",
+            subject: item.Subject || "COE Examination",
+            section: item.Section,
+            day: item.Day,
+            time_slot: item.Slot,     // e.g., "09:00-11:00"
+            slot2: item.Slot2 || null,
+            room: item.Room || "Exam Hall",
+            type: "COE",
+            year: item.Semester,
+            isGroupSplit: false,
+          });
+
+          return;  // VERY IMPORTANT → avoid processing under other rules
+        }
+                // Case 1: Grouped entries (T or P)
+
         if (item.Groups && Array.isArray(item.Groups)) {
           item.Groups.forEach((g) => {
             expanded.push({
