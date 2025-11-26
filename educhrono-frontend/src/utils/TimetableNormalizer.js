@@ -10,15 +10,15 @@ export const normalizeStudentTimetable = (raw) => {
       day: item.Day,
       time_slot: item.Slot,
       slot2: item.Slot2 || null,
-      section: item.Section,
       year: item.Semester,
       type: item.Type,
+      section: item.Section,
     };
 
-    // -------------------------------
-    // CASE 1: Grouped T / P blocks
-    // -------------------------------
-    if (item.Groups && Array.isArray(item.Groups)) {
+    // ---------------------------------------
+    // 1️⃣ GROUP-SPLIT T/P BLOCKS
+    // ---------------------------------------
+    if (Array.isArray(item.Groups) && item.Groups.length > 0) {
       item.Groups.forEach((g) => {
         result.push({
           ...base,
@@ -26,16 +26,16 @@ export const normalizeStudentTimetable = (raw) => {
           subject: g.subject,
           faculty: g.faculty,
           room: g.room,
-          type: g.type,       // override T/P
-          section: `${item.Section}-${g.group}`,  // e.g., A-A1 / A-A2
+          type: g.type || item.Type,       // ensure P/T
+          section: g.group,                // A1, A2
         });
       });
       return;
     }
 
-    // -------------------------------
-    // CASE 2: Normal lectures (L) & COE/PDP
-    // -------------------------------
+    // ---------------------------------------
+    // 2️⃣ NORMAL ENTRIES (L, PDP, COE)
+    // ---------------------------------------
     result.push({
       ...base,
       subject: item.Subject,
