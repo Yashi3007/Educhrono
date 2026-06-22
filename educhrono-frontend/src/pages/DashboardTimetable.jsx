@@ -10,6 +10,8 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import TimetableTable from "../components/TimetableTable";
 
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
 // ----------------------------------------------
 // SinglePaginationComponent
 // ----------------------------------------------
@@ -501,7 +503,7 @@ const downloadWord = async () => {
     const identifier = "all";
 
     const res = await fetch(
-      `http://localhost:8000/timetable/download-word/${roleValue}/${identifier}`
+      `${API_URL}/timetable/download-word/${roleValue}/${identifier}`
     );
 
     if (!res.ok) {
@@ -561,13 +563,13 @@ const downloadWord = async () => {
               <FileUploader
                 label="Upload Teaching Load"
                 onUpload={(f) => handleUpload(f, "teaching-load")}
-                onDownloadTemplate={() => window.open("http://localhost:8000/upload/template/teaching-load")}
+                onDownloadTemplate={() => window.open(`${API_URL}/upload/template/teaching-load`)}
               />
 
               <FileUploader
                 label="Upload Room List"
                 onUpload={(f) => handleUpload(f, "room-list")}
-                onDownloadTemplate={() => window.open("http://localhost:8000/upload/template/room-list")}
+                onDownloadTemplate={() => window.open(`${API_URL}/upload/template/room-list`)}
               />
 
               {/* <FileUploader
