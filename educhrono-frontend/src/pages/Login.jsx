@@ -96,6 +96,12 @@ const Login = () => {
         >
           Login
         </button>
+        <p className="text-sm text-center mt-4 text-gray-500">
+  Forgot your password? 
+           <span className="text-blue-600 font-medium cursor-pointer">
+    Contact admin
+  </span>
+</p>
       </form>
     </div>
   );

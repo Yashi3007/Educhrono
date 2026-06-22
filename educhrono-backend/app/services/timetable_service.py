@@ -1,53 +1,162 @@
+
 # ======================================================================
-#  TIMETABLE GENERATOR – FINAL VERIFIED VERSION
-#  (Strict rules: P → COE → PDP → T → L)
-#  All constraints applied as discussed.
+#  TIMETABLE GENERATOR – FINAL VERSION (WITH FIXED PROJECT1 + COE ROOMS)
+# ======================================================================
+#  Requirements implemented:
+#
+#   1) 4th year (Semester 7), Sections A / B / C:
+#        • All subjects whose name contains "project1"
+#          are treated as Project1 Lab.
+#        • Project1 Lab is FIXED on:
+#              Wednesday, Thursday, Friday
+#              11:00–12:00 and 12:00–13:00  (2-hour block)
+#        • Stored as Type="P" (lab), full section (no A1/A2 split).
+#
+#   2) COE Labs:
+#        • All Semester 3 COE classes are in room  B-202  only.
+#        • All Semester 5 COE classes are in room  B-201  only.
+#        • No overlapping COE in same room & time.
+#
+#   3) GAP RULE for each section per day:
+#        Once any slot is occupied, a later slot can be used only if
+#        the previous slot in the chain is already filled.
+#        Slot chain:
+#           09–10 → 10–11 → 11–12 → 12–13 → 14–15 → 15–16 → 16–17
+#
+#   4) Priority of placement:
+#        Project1 (fixed) → Labs (P) → COE → PDP → Tutorials (T) → Lectures (L)
+#
+#  Collections:
+#       teaching_load  : input load
+#       room_list      : rooms
+#       timetable      : output timetable (cleared, then insert_many)
+#
 # ======================================================================
 
 from app import db
 import random
 from collections import defaultdict
 
-# ---------------------------------------------------------------
-# TIME SLOTS (24-hour format kept clean for frontend mapping)
-# ---------------------------------------------------------------
+# ======================================================================
+#  PART 1 – CONSTANTS: SLOTS, DAYS, PROJECT CONFIG
+# ======================================================================
 
 FIRST_HALF_1HR = [
     "09:00-10:00",
     "10:00-11:00",
     "11:00-12:00",
-    "12:00-13:00"
+    "12:00-13:00",
 ]
 
 SECOND_HALF_1HR = [
     "14:00-15:00",
     "15:00-16:00",
-    "16:00-17:00"
+    "16:00-17:00",
 ]
 
 FIRST_HALF_2HR = [
     ("09:00-10:00", "10:00-11:00"),
-    ("10:00-11:00", "11:00-12:00")
+    ("10:00-11:00", "11:00-12:00"),
+    ("11:00-12:00", "12:00-13:00"),
 ]
 
 SECOND_HALF_2HR = [
     ("14:00-15:00", "15:00-16:00"),
-    ("15:00-16:00", "16:00-17:00")
+    ("15:00-16:00", "16:00-17:00"),
 ]
+
+ALL_SLOTS_ORDER = FIRST_HALF_1HR + SECOND_HALF_1HR
 
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 # ---------------------------------------------------------------
-# CREATE GROUPS: A → A1, A2  /  B → B1, B2
+#  FIXED PROJECT CONFIG (HARD-CODED)
+#  Sem 7 → Project1
+#  Sem 8 → Project2
+#  Sections → A, B, C
+#  Days → Wednesday, Thursday, Friday
+#  Time → 11:00–12:00 & 12:00–13:00
 # ---------------------------------------------------------------
-def make_groups(section):
-    return f"{section}1", f"{section}2"
+
+FIXED_PROJECT_CONFIG = {
+    7: {   # 4th Year – Semester 7 → PROJECT1
+        "keyword": "project1",
+        "Sections": ["A", "B", "C"],
+        "Days": ["Wednesday", "Thursday", "Friday"],
+        "Slots": ("11:00-12:00", "12:00-13:00"),
+    },
+    8: {   # 4th Year – Semester 8 → PROJECT2
+        "keyword": "project2",
+        "Sections": ["A", "B", "C"],
+        "Days": ["Wednesday", "Thursday", "Friday"],
+        "Slots": ("11:00-12:00", "12:00-13:00"),
+    },
+}
+
+
+# Fixed Project1 config – ONLY Semester 7
+PROJECT1_FIXED_SEM = 7
+PROJECT1_FIXED_SECTIONS = ["A", "B", "C"]
+PROJECT1_FIXED_DAYS = ["Wednesday", "Thursday", "Friday"]
+PROJECT1_FIXED_SLOTS = ("11:00-12:00", "12:00-13:00")
+
+# Saturday holiday only for 4th year
+SATURDAY_HOLIDAY_SEMS = [7, 8]
+
+
 # ======================================================================
-#  PART 2 — LOAD DATA, GROUP BY TYPE, PREPARE ROOM MAP
+#  PART 2 – SMALL HELPERS
+# ======================================================================
+
+def to_int(value, default=0):
+    """
+    Safe int conversion.
+    Handles: '', None, '  ', '7', 7, '7.0'
+    """
+    try:
+        s = str(value).strip()
+        if s == "" or s.lower() == "nan":
+            return default
+        if "." in s:
+            return int(float(s))
+        return int(s)
+    except Exception:
+        return default
+
+
+def make_groups(section):
+    """Create two groups for labs/tutorials: A → A1/A2 etc."""
+    sec = str(section).strip()
+    return f"{sec}1", f"{sec}2"
+
+
+def is_saturday_holiday(sem, day):
+    """Sem 7 & 8: no classes on Saturday."""
+    return sem in SATURDAY_HOLIDAY_SEMS and day == "Saturday"
+
+
+def can_place_without_gap(sem, sec, day, slot, section_busy):
+    """
+    Gap rule: slot allowed only if
+        • it is the first slot in chain, OR
+        • previous slot is already filled for that section/day.
+    """
+    if slot not in ALL_SLOTS_ORDER:
+        return True
+
+    idx = ALL_SLOTS_ORDER.index(slot)
+    if idx == 0:
+        return True
+
+    prev_slot = ALL_SLOTS_ORDER[idx - 1]
+    return section_busy.get((sem, sec, day, prev_slot), False)
+
+
+# ======================================================================
+#  PART 3 – LOAD DATA & GROUP BY SEM-SECTION
 # ======================================================================
 
 def load_data():
-    """Fetch teaching load + rooms."""
     teaching_load = list(db["teaching_load"].find({}, {"_id": 0}))
     rooms = list(db["room_list"].find({}, {"_id": 0}))
     return teaching_load, rooms
@@ -55,265 +164,363 @@ def load_data():
 
 def group_by_sem_section(teaching_load):
     """
-    Groups teaching load into:
-    - L (lecture)
-    - T (tutorial)
-    - P (lab)
-    - PDP
-    - COE
-    
-    Also builds:
-    - lecture_count[sem][sec][subject] = total L classes needed
-    - group_map[(sem, sec)] = list of rows
+    Expand numeric loads into single units.
+    Returns:
+        L, T, P, PDP, COE, section_map
     """
-    grouped = defaultdict(lambda: defaultdict(list))
-    lecture_count = defaultdict(lambda: defaultdict(int))
-
-    # final typed groups
     L = defaultdict(lambda: defaultdict(list))
     T = defaultdict(lambda: defaultdict(list))
     P = defaultdict(lambda: defaultdict(list))
     PDP = defaultdict(lambda: defaultdict(list))
     COE = defaultdict(lambda: defaultdict(list))
+    section_map = defaultdict(lambda: defaultdict(list))
 
     for row in teaching_load:
-        sem = row["Semester"]
-        sec = row["Section"]
-        subject = row["Subject_Name"]
-        faculty = row["Faculty_Name"]
+        sem = to_int(row.get("Semester"), 0)
+        if sem == 0:   # skip invalid rows
+            continue
 
-        # LECTURE COUNT LOGIC (STRICT)
-        if row["L"] > 0:
-            for _ in range(row["L"]):
-                L[sem][sec].append({
-                    "subject": subject,
-                    "faculty": faculty
-                })
-        
-        if row["T"] > 0:
-            for _ in range(row["T"]):
-                T[sem][sec].append({
-                    "subject": subject,
-                    "faculty": faculty
-                })
+        sec = str(row.get("Section", "")).strip()
+        if not sec:
+            continue
 
-        if row["P"] > 0:
-            for _ in range(row["P"]):
-                P[sem][sec].append({
-                    "subject": subject,
-                    "faculty": faculty
-                })
+        subject = str(row.get("Subject_Name", "")).strip()
+        faculty = str(row.get("Faculty_Name", "")).strip()
 
-        if row["PDP"] > 0:
-            for _ in range(row["PDP"]):
-                PDP[sem][sec].append({
-                    "subject": subject,
-                    "faculty": faculty
-                })
+        l_cnt = to_int(row.get("L"), 0)
+        t_cnt = to_int(row.get("T"), 0)
+        p_cnt = to_int(row.get("P"), 0)
+        coe_cnt = to_int(row.get("COE"), 0)
+        pdp_cnt = to_int(row.get("PDP"), 0)
 
-        if row["COE"] > 0:
-            for _ in range(row["COE"]):
-                COE[sem][sec].append({
-                    "subject": subject,
-                    "faculty": faculty
-                })
+        for _ in range(l_cnt):
+            L[sem][sec].append({"subject": subject, "faculty": faculty})
 
-        # group mapping
-        grouped[sem][sec].append(row)
+        for _ in range(t_cnt):
+            T[sem][sec].append({"subject": subject, "faculty": faculty})
 
-    return L, T, P, PDP, COE, grouped
+        for _ in range(p_cnt):
+            P[sem][sec].append({"subject": subject, "faculty": faculty})
 
+        for _ in range(coe_cnt):
+            COE[sem][sec].append({"subject": subject, "faculty": faculty})
+
+        for _ in range(pdp_cnt):
+            PDP[sem][sec].append({"subject": subject, "faculty": faculty})
+
+        section_map[sem][sec].append(row)
+
+    return L, T, P, PDP, COE, section_map
+
+
+# ======================================================================
+#  PART 4 – ROOMS
+# ======================================================================
 
 def build_room_map(room_list):
     """
-    Creates:
-    - lecture_room[(sem, sec)] → fixed room
-    - lab_rooms → list of labs
-    - any_rooms → fallback list for PDP/COE/T
+    Build:
+        lecture_room[(sem,sec)] → fixed lecture room
+        lab_rooms_normal        → Lab rooms except B-201/B-202
+        any_rooms               → non-lab rooms
+    B-201 and B-202 are reserved only for COE (sem 5 & sem 3).
     """
     lecture_room = {}
-    lab_rooms = []
+    lab_rooms_normal = []
     any_rooms = []
 
-    # STEP 1 — assign fixed lecture room per sem-section
     for r in room_list:
-        room = r["Room_No"]
-        rtype = r["Room_Type"]
+        room_no = str(r.get("Room_No", "")).strip()
+        rtype = str(r.get("Room_Type", "")).strip()
 
         if rtype == "Lab":
-            lab_rooms.append(room)
+            if room_no not in ("B-201", "B-202"):
+                lab_rooms_normal.append(room_no)
         else:
-            any_rooms.append(room)
+            any_rooms.append(room_no)
 
-        # If assigned mapping exists, use it
         if "Assigned_Semester" in r and "Assigned_Section" in r:
-            sem = r["Assigned_Semester"]
-            sec = r["Assigned_Section"]
-            lecture_room[(sem, sec)] = room
+            sem = to_int(r.get("Assigned_Semester"), 0)
+            sec = str(r.get("Assigned_Section", "")).strip()
+            if sem and sec:
+                lecture_room[(sem, sec)] = room_no
 
-    return lecture_room, lab_rooms, any_rooms
+    return lecture_room, lab_rooms_normal, any_rooms
+
+
 # ======================================================================
-#  PART 3 — BUSY MATRICES, CHECK & MARK FUNCTIONS
+#  PART 5 – STATE STRUCTURES
 # ======================================================================
 
 def initialize_state():
-    """
-    Initializes all state holders used during timetable generation.
-    """
-    faculty_busy = {}     # (faculty, day, slot) → True
-    section_busy = {}     # (sem, sec, day, slot) → True
-    group_busy = {}       # (sem, sec_group, day, slot) → True
+    faculty_busy = {}      # (faculty, day, slot) → True
+    section_busy = {}      # (sem, sec, day, slot) → True
+    group_busy = {}        # (sem, group, day, slot) → True
 
     subject_daily_used = defaultdict(lambda: defaultdict(set))
-    # subject_daily_used[(sem, sec)][day] = set(subjects placed)
-
     special_daily_used = defaultdict(lambda: defaultdict(str))
-    # special_daily_used[(sem, sec)][day] = "PDP" or "COE"
 
-    timetable = []  # final saved records
-
+    timetable = []
     return faculty_busy, section_busy, group_busy, subject_daily_used, special_daily_used, timetable
 
 
-# ---------------------------------------------------------------
-#  CHECK FREE (faculty, section, groups)
-# ---------------------------------------------------------------
-def is_free(sem, sec, faculty, day, slots, faculty_busy, section_busy, group_busy, groups=None):
+def is_free(
+    sem, sec, faculty, day, slots,
+    faculty_busy, section_busy, group_busy,
+    groups=None
+):
     groups = groups or []
 
     for slot in slots:
-        # Faculty busy?
         if faculty_busy.get((faculty, day, slot)):
             return False
-
-        # Section busy?
         if section_busy.get((sem, sec, day, slot)):
             return False
-
-        # Group busy?
         for g in groups:
             if group_busy.get((sem, g, day, slot)):
                 return False
-
     return True
 
 
-# ---------------------------------------------------------------
-#  MARK OCCUPIED
-# ---------------------------------------------------------------
-def mark_slots(sem, sec, faculty, day, slots,
-               faculty_busy, section_busy, group_busy,
-               groups=None):
-
+def mark_slots(
+    sem, sec, faculty, day, slots,
+    faculty_busy, section_busy, group_busy,
+    groups=None
+):
     groups = groups or []
 
     for slot in slots:
         faculty_busy[(faculty, day, slot)] = True
         section_busy[(sem, sec, day, slot)] = True
-
         for g in groups:
             group_busy[(sem, g, day, slot)] = True
+
+
 # ======================================================================
-#  PART 4 — CORE PLACEMENT HELPERS
-#  (Applies all strict rules: priority, special clashes, once-per-day)
+#  PART 6 – FIXED PROJECT1 LABS (SEM 7, A/B/C)
 # ======================================================================
 
-# ---------------------------------------------------------------
-#  TRY PLACE IN FIRST HALF THEN SECOND HALF (1-hour)
-# ---------------------------------------------------------------
-def try_place_single_hour(
-    sem, sec, subject, faculty, type_name,
-    allowed_rooms,
+def extract_sem7_project1_labs(P):
+    """
+    Take only subjects whose name contains "project1" (case-insensitive)
+    from Semester 7, Sections A/B/C.
+    Remove them from P so they are not scheduled again.
+    """
+    project_labs = defaultdict(lambda: defaultdict(list))
+    sem = PROJECT1_FIXED_SEM
+
+    if sem not in P:
+        return project_labs
+
+    for sec in list(P[sem].keys()):
+        items = P[sem][sec]
+        new_items = []
+        for item in items:
+            subj_l = item["subject"].lower()
+            if sec in PROJECT1_FIXED_SECTIONS and "project1" in subj_l:
+                project_labs[sem][sec].append(item)
+            else:
+                new_items.append(item)
+        P[sem][sec] = new_items
+
+    return project_labs
+
+
+def place_fixed_project_from_p_or_coe(
+    P, COE, any_rooms,
     faculty_busy, section_busy, group_busy,
     subject_daily_used, special_daily_used,
     timetable
 ):
     """
-    General engine for L, PDP, and fallback T (if needed).
+    FINAL HARD FIX:
+    Sem 7 → Project1 Lab
+    Sem 8 → Project2 Lab
+    Sections → A, B, C ONLY
+    Days → Wednesday, Thursday, Friday
+    Time → 11:00–12:00 & 12:00–13:00 (2 hours)
+    Force = True (koi condition check nahi)
     """
+
+    for sem, config in FIXED_PROJECT_CONFIG.items():
+        keyword = config["keyword"].lower()
+        fixed_sections = config["Sections"]
+        days = config["Days"]
+        s1, s2 = config["Slots"]
+
+        for sec in fixed_sections:
+
+            p_items = P.get(sem, {}).get(sec, [])
+            c_items = COE.get(sem, {}).get(sec, [])
+
+            matches = []
+
+            for item in p_items:
+                if keyword in item["subject"].lower():
+                    matches.append(item)
+
+            for item in c_items:
+                if keyword in item["subject"].lower():
+                    matches.append(item)
+
+            if not matches:
+                matches = [{
+                    "subject": f"{config['keyword']} Lab",
+                    "faculty": "Project Guide"
+                }]
+
+            for i, day in enumerate(days):
+                item = matches[i % len(matches)]
+                subject = item["subject"]
+                faculty = item["faculty"]
+
+                room = random.choice(any_rooms) if any_rooms else None
+
+                timetable.append({
+                    "Semester": sem,
+                    "Section": sec,
+                    "Day": day,
+                    "Type": "P",
+                    "Slot": s1,
+                    "Slot2": s2,
+                    "Subject": subject,
+                    "Faculty": faculty,
+                    "Room": room
+                })
+
+                faculty_key = f"{faculty}__{sec}"
+
+                mark_slots(
+                    sem, sec, faculty_key, day, [s1, s2],
+                    faculty_busy, section_busy, group_busy
+                )
+
+                subject_daily_used[(sem, sec)][day].add(subject)
+                special_daily_used[(sem, sec)][day] = "COE"
+
+            P.setdefault(sem, {})
+            COE.setdefault(sem, {})
+
+            P[sem][sec] = [
+                x for x in P[sem].get(sec, [])
+                if keyword not in x["subject"].lower()
+            ]
+
+            COE[sem][sec] = [
+                x for x in COE[sem].get(sec, [])
+                if keyword not in x["subject"].lower()
+            ]
+
+# ======================================================================
+#  PART 7 – LAB/TUTORIAL PAIRING
+# ======================================================================
+
+def build_pairs(items):
+    """Return [(s1,s2), (s2,s1), ...]."""
+    if len(items) < 2:
+        return []
+
+    pairs = []
+    for i in range(0, len(items), 2):
+        if i + 1 >= len(items):
+            break
+        a = items[i]
+        b = items[i + 1]
+        pairs.append((a, b))
+        pairs.append((b, a))
+    return pairs
+
+
+# ======================================================================
+#  PART 8 – 2-HOUR LAB (P)
+# ======================================================================
+
+def try_place_two_hour_lab(
+    sem, sec,
+    subj1, subj2,
+    fac1, fac2,
+    group1, group2,
+    allowed_rooms,
+    faculty_busy, section_busy, group_busy,
+    subject_daily_used, special_daily_used,
+    timetable
+):
+    slot_pairs = FIRST_HALF_2HR + SECOND_HALF_2HR
 
     for day in DAYS:
 
-        # SPECIAL RULE: PDP & COE can't be same day
-        if type_name == "PDP" and special_daily_used[(sem, sec)][day] == "COE":
-            continue
-        if type_name == "COE" and special_daily_used[(sem, sec)][day] == "PDP":
+        if is_saturday_holiday(sem, day):
             continue
 
-        # RULE: L / T / PDP cannot repeat same subject on same day
-        if subject in subject_daily_used[(sem, sec)][day]:
+        if subj1 in subject_daily_used[(sem, sec)][day]:
+            continue
+        if subj2 in subject_daily_used[(sem, sec)][day]:
             continue
 
-        # FIRST HALF PRIORITY
-        for slot in FIRST_HALF_1HR:
-            room = random.choice(allowed_rooms) if allowed_rooms else None
+        for (s1, s2) in slot_pairs:
 
-            if is_free(
-                sem, sec, faculty, day, [slot],
-                faculty_busy, section_busy, group_busy
+            if not can_place_without_gap(sem, sec, day, s1, section_busy):
+                continue
+
+            g1_list = [group1] if group1 else []
+            g2_list = [group2] if group2 else []
+
+            if not is_free(
+                sem, sec, fac1, day, [s1, s2],
+                faculty_busy, section_busy, group_busy,
+                g1_list,
             ):
-                # commit
-                timetable.append({
-                    "Semester": sem,
-                    "Section": sec,
-                    "Subject": subject,
-                    "Faculty": faculty,
-                    "Type": type_name,
-                    "Day": day,
-                    "Slot": slot,
-                    "Room": room
-                })
+                continue
 
-                mark_slots(
-                    sem, sec, faculty, day, [slot],
-                    faculty_busy, section_busy, group_busy
-                )
-
-                subject_daily_used[(sem, sec)][day].add(subject)
-                if type_name in ["COE", "PDP"]:
-                    special_daily_used[(sem, sec)][day] = type_name
-
-                return True
-
-        # SECOND HALF fallback
-        for slot in SECOND_HALF_1HR:
-            room = random.choice(allowed_rooms) if allowed_rooms else None
-
-            if is_free(
-                sem, sec, faculty, day, [slot],
-                faculty_busy, section_busy, group_busy
+            if not is_free(
+                sem, sec, fac2, day, [s1, s2],
+                faculty_busy, section_busy, group_busy,
+                g2_list,
             ):
-                # commit
-                timetable.append({
-                    "Semester": sem,
-                    "Section": sec,
-                    "Subject": subject,
-                    "Faculty": faculty,
-                    "Type": type_name,
-                    "Day": day,
-                    "Slot": slot,
-                    "Room": room
-                })
+                continue
 
-                mark_slots(
-                    sem, sec, faculty, day, [slot],
-                    faculty_busy, section_busy, group_busy
-                )
+            room1 = random.choice(allowed_rooms) if allowed_rooms else None
+            room2 = random.choice(allowed_rooms) if allowed_rooms else None
 
-                subject_daily_used[(sem, sec)][day].add(subject)
-                if type_name in ["COE", "PDP"]:
-                    special_daily_used[(sem, sec)][day] = type_name
+            timetable.append({
+                "Semester": sem,
+                "Section": sec,
+                "Day": day,
+                "Type": "P",
+                "Slot": s1,
+                "Slot2": s2,
+                "Subject": None,
+                "Faculty": None,
+                "Room": None,
+                "Groups": [
+                    {"group": group1, "subject": subj1, "faculty": fac1, "room": room1},
+                    {"group": group2, "subject": subj2, "faculty": fac2, "room": room2},
+                ],
+            })
 
-                return True
+            mark_slots(
+                sem, sec, fac1, day, [s1, s2],
+                faculty_busy, section_busy, group_busy,
+                g1_list,
+            )
+            mark_slots(
+                sem, sec, fac2, day, [s1, s2],
+                faculty_busy, section_busy, group_busy,
+                g2_list,
+            )
+
+            subject_daily_used[(sem, sec)][day].add(subj1)
+            subject_daily_used[(sem, sec)][day].add(subj2)
+
+            return True
 
     return False
+
+
 # ======================================================================
-#  PART 5 — 2-HOUR SLOT PLACEMENT + PAIRING ENGINE
+#  PART 9 – GENERIC 2-HOUR BLOCK (for non-fixed COE)
 # ======================================================================
 
-# ---------------------------------------------------------------
-# TRY PLACE TWO-HOUR CLASS (COE or LAB)
-# ---------------------------------------------------------------
 def try_place_two_hour(
     sem, sec,
     subj1, subj2,
@@ -323,472 +530,183 @@ def try_place_two_hour(
     faculty_busy, section_busy, group_busy,
     subject_daily_used, special_daily_used,
     timetable,
-    type_name="P"
+    type_name="COE",
 ):
-    """
-    Places Labs (P) or COE (2-hour block)
-    P has (A1/A2 split)
-    COE has full section (no groups)
-    """
+    slot_pairs = FIRST_HALF_2HR + SECOND_HALF_2HR
 
     for day in DAYS:
 
-        # Special restriction: PDP & COE cannot be same day
+        if is_saturday_holiday(sem, day):
+            continue
+
         if type_name == "COE" and special_daily_used[(sem, sec)][day] == "PDP":
             continue
         if type_name == "PDP" and special_daily_used[(sem, sec)][day] == "COE":
             continue
 
-        # Do not repeat subjects on same day
         if subj1 in subject_daily_used[(sem, sec)][day]:
             continue
         if subj2 in subject_daily_used[(sem, sec)][day]:
             continue
 
-        # FIRST HALF priority
-        for (s1, s2) in FIRST_HALF_2HR:
-            room1, room2 = random.sample(allowed_rooms, 2) if len(allowed_rooms) >= 2 else (None, None)
+        for (s1, s2) in slot_pairs:
 
-            # LAB uses grouping (A1/A2). COE does NOT use groups.
-            grp1_list = [group1] if type_name == "P" else []
-            grp2_list = [group2] if type_name == "P" else []
+            if not can_place_without_gap(sem, sec, day, s1, section_busy):
+                continue
 
-            if is_free(sem, sec, fac1, day, [s1, s2], faculty_busy, section_busy, group_busy, grp1_list) and \
-               is_free(sem, sec, fac2, day, [s1, s2], faculty_busy, section_busy, group_busy, grp2_list):
+            g1_list = [group1] if group1 else []
+            g2_list = [group2] if group2 else []
 
-                timetable.append({
-                    "Semester": sem,
-                    "Section": sec,
-                    "Day": day,
-                    "Type": type_name,
-                    "Slot": s1,
-                    "Slot2": s2,
-                    "Groups": [
-                        {"group": group1, "subject": subj1, "faculty": fac1, "room": room1},
-                        {"group": group2, "subject": subj2, "faculty": fac2, "room": room2}
-                    ] if type_name == "P" else [],
-                    "Subject": subj1 if type_name == "COE" else None,
-                    "Faculty": fac1 if type_name == "COE" else None,
-                    "Room": room1 if type_name == "COE" else None
-                })
+            if not is_free(
+                sem, sec, fac1, day, [s1, s2],
+                faculty_busy, section_busy, group_busy,
+                g1_list,
+            ):
+                continue
 
-                # Mark slots
-                mark_slots(sem, sec, fac1, day, [s1, s2], faculty_busy, section_busy, group_busy, grp1_list)
-                mark_slots(sem, sec, fac2, day, [s1, s2], faculty_busy, section_busy, group_busy, grp2_list)
+            if not is_free(
+                sem, sec, fac2, day, [s1, s2],
+                faculty_busy, section_busy, group_busy,
+                g2_list,
+            ):
+                continue
 
-                # Mark usage
-                subject_daily_used[(sem, sec)][day].add(subj1)
-                subject_daily_used[(sem, sec)][day].add(subj2)
+            room1 = random.choice(allowed_rooms) if allowed_rooms else None
+            room2 = random.choice(allowed_rooms) if allowed_rooms else None
 
-                if type_name == "COE":
-                    special_daily_used[(sem, sec)][day] = "COE"
+            record = {
+                "Semester": sem,
+                "Section": sec,
+                "Day": day,
+                "Type": type_name,
+                "Slot": s1,
+                "Slot2": s2,
+            }
 
-                return True
+            if type_name == "COE":
+                record["Subject"] = subj1
+                record["Faculty"] = fac1
+                record["Room"] = room1
+                record["Groups"] = []
+            else:  # generic 2-hour block
+                record["Subject"] = None
+                record["Faculty"] = None
+                record["Room"] = None
+                record["Groups"] = [
+                    {"group": group1, "subject": subj1, "faculty": fac1, "room": room1},
+                    {"group": group2, "subject": subj2, "faculty": fac2, "room": room2},
+                ]
 
-        # SECOND HALF fallback
-        for (s1, s2) in SECOND_HALF_2HR:
-            room1, room2 = random.sample(allowed_rooms, 2) if len(allowed_rooms) >= 2 else (None, None)
+            timetable.append(record)
 
-            grp1_list = [group1] if type_name == "P" else []
-            grp2_list = [group2] if type_name == "P" else []
+            mark_slots(
+                sem, sec, fac1, day, [s1, s2],
+                faculty_busy, section_busy, group_busy,
+                g1_list,
+            )
+            mark_slots(
+                sem, sec, fac2, day, [s1, s2],
+                faculty_busy, section_busy, group_busy,
+                g2_list,
+            )
 
-            if is_free(sem, sec, fac1, day, [s1, s2], faculty_busy, section_busy, group_busy, grp1_list) and \
-               is_free(sem, sec, fac2, day, [s1, s2], faculty_busy, section_busy, group_busy, grp2_list):
+            subject_daily_used[(sem, sec)][day].add(subj1)
+            subject_daily_used[(sem, sec)][day].add(subj2)
 
-                timetable.append({
-                    "Semester": sem,
-                    "Section": sec,
-                    "Day": day,
-                    "Type": type_name,
-                    "Slot": s1,
-                    "Slot2": s2,
-                    "Groups": [
-                        {"group": group1, "subject": subj1, "faculty": fac1, "room": room1},
-                        {"group": group2, "subject": subj2, "faculty": fac2, "room": room2}
-                    ] if type_name == "P" else [],
-                    "Subject": subj1 if type_name == "COE" else None,
-                    "Faculty": fac1 if type_name == "COE" else None,
-                    "Room": room1 if type_name == "COE" else None
-                })
+            if type_name == "COE":
+                special_daily_used[(sem, sec)][day] = "COE"
 
-                mark_slots(sem, sec, fac1, day, [s1, s2], faculty_busy, section_busy, group_busy, grp1_list)
-                mark_slots(sem, sec, fac2, day, [s1, s2], faculty_busy, section_busy, group_busy, grp2_list)
-
-                subject_daily_used[(sem, sec)][day].add(subj1)
-                subject_daily_used[(sem, sec)][day].add(subj2)
-
-                if type_name == "COE":
-                    special_daily_used[(sem, sec)][day] = "COE"
-
-                return True
+            return True
 
     return False
-def build_pairs(subject_list):
-    """
-    Input: list of dictionaries → {subject, faculty}
-    Output: [(subjA, subjB), (subjB, subjA), ...] strict alternating
-    Pattern:
-        Day1 → subj1(A1), subj2(A2)
-        Day2 → subj2(A1), subj1(A2)
-    """
-    if len(subject_list) < 2:
-        return []
 
-    pairs = []
 
-    for i in range(0, len(subject_list), 2):
-        if i + 1 < len(subject_list):
-            s1 = subject_list[i]
-            s2 = subject_list[i + 1]
-
-            # Pair 1 → normal
-            pairs.append((s1, s2))
-
-            # Pair 2 → swapped
-            pairs.append((s2, s1))
-
-    return pairs
 # ======================================================================
-#  PART 6 — MAIN GENERATION ENGINE (ORDER STRICT + FIRST-HALF PRIORITY)
+#  PART 10 – COE (SEM 3 → B-202, SEM 5 → B-201)
 # ======================================================================
 
-import random
+def coe_fixed_room_for_sem(sem):
+    if sem == 3:
+        return "B-202"
+    if sem == 5:
+        return "B-201"
+    return None
 
-def generate_timetable():
-    # deterministic output → same timetable every run
-    random.seed(999)
 
-    # -----------------------------------------------------------
-    # LOAD + GROUP + STATE INIT
-    # -----------------------------------------------------------
-    teaching_load, room_list = load_data()
-    L, T, P, PDP, COE, section_map = group_by_sem_section(teaching_load)
-    lecture_room, lab_rooms, any_rooms = build_room_map(room_list)
+def try_place_coe_block(
+    sem, sec,
+    subject, faculty,
+    room,
+    faculty_busy, section_busy, group_busy,
+    subject_daily_used, special_daily_used,
+    coe_room_busy,
+    timetable
+):
+    slot_pairs = FIRST_HALF_2HR + SECOND_HALF_2HR
 
-    (
-        faculty_busy,
-        section_busy,
-        group_busy,
-        subject_daily_used,
-        special_daily_used,
-        timetable
-    ) = initialize_state()
+    for day in DAYS:
 
-    # ALL semesters + sections from teaching_load
-    all_sem_sec = [(sem, sec) for sem in section_map for sec in section_map[sem]]
-
-    # -----------------------------------------------------------
-    # Helper: check if FIRST-HALF has empty slot
-    # -----------------------------------------------------------
-    def first_half_has_empty(sem, sec, day):
-        for slot in FIRST_HALF_1HR:
-            if not section_busy.get((sem, sec, day, slot)):
-                return True
-        return False
-
-    # -----------------------------------------------------------
-    # 1) PLACE LAB CLASSES (P) — HIGHEST PRIORITY (2-hour)
-    # -----------------------------------------------------------
-    for (sem, sec) in all_sem_sec:
-        plist = P[sem][sec]
-        if not plist:
+        if is_saturday_holiday(sem, day):
             continue
 
-        g1, g2 = make_groups(sec)
-        pairs = build_pairs(plist)
+        # COE should not clash with PDP
+        if special_daily_used[(sem, sec)][day] == "PDP":
+            continue
 
-        for (s1, s2) in pairs:
-            try_place_two_hour(
-                sem, sec,
-                s1["subject"], s2["subject"],
-                s1["faculty"], s2["faculty"],
-                g1, g2,
-                lab_rooms,
+        if subject in subject_daily_used[(sem, sec)][day]:
+            continue
+
+        for (s1, s2) in slot_pairs:
+
+            if not can_place_without_gap(sem, sec, day, s1, section_busy):
+                continue
+
+            if not is_free(
+                sem, sec, faculty, day, [s1, s2],
                 faculty_busy, section_busy, group_busy,
-                subject_daily_used, special_daily_used,
-                timetable,
-                type_name="P"
+            ):
+                continue
+
+            # 🔥 IMPORTANT FIX: room clash ONLY if room exists
+            if room:
+                if coe_room_busy.get((room, day, s1)) or coe_room_busy.get((room, day, s2)):
+                    continue
+
+            timetable.append({
+                "Semester": sem,
+                "Section": sec,
+                "Day": day,
+                "Type": "COE",
+                "Slot": s1,
+                "Slot2": s2,
+                "Subject": subject,
+                "Faculty": faculty,
+                "Room": room,
+                "Groups": [],
+            })
+
+            mark_slots(
+                sem, sec, faculty, day, [s1, s2],
+                faculty_busy, section_busy, group_busy,
             )
 
-    # -----------------------------------------------------------
-    # 2) PLACE COE (2-hour block)
-    # -----------------------------------------------------------
-    for (sem, sec) in all_sem_sec:
-        for item in COE[sem][sec]:
-            try_place_two_hour(
-                sem, sec,
-                item["subject"], item["subject"],
-                item["faculty"], item["faculty"],
-                None, None,
-                any_rooms + list(lecture_room.values()),
-                faculty_busy, section_busy, group_busy,
-                subject_daily_used, special_daily_used,
-                timetable,
-                type_name="COE"
-            )
+            if room:
+                coe_room_busy[(room, day, s1)] = True
+                coe_room_busy[(room, day, s2)] = True
 
-    # -----------------------------------------------------------
-    # 3) PLACE PDP — should prefer first-half
-    # -----------------------------------------------------------
-    for (sem, sec) in all_sem_sec:
-        pdp_items = PDP[sem][sec]
-        last_used_day_index = -2
+            subject_daily_used[(sem, sec)][day].add(subject)
+            special_daily_used[(sem, sec)][day] = "COE"
 
-        for item in pdp_items:
-            placed = False
+            return True
 
-            for i, day in enumerate(DAYS):
-                # alternate-day rule
-                if i - last_used_day_index < 2:
-                    continue
+    return False
 
-                # skip if COE already same day
-                if special_daily_used[(sem, sec)][day] == "COE":
-                    continue
 
-                # PDP must prefer FIRST-HALF → do not allow 2nd half if first is free
-                if first_half_has_empty(sem, sec, day):
-                    # try first-half only
-                    for slot in FIRST_HALF_1HR:
-                        if try_place_single_hour(
-                            sem, sec,
-                            item["subject"], item["faculty"],
-                            "PDP",
-                            any_rooms,
-                            faculty_busy, section_busy, group_busy,
-                            subject_daily_used, special_daily_used,
-                            timetable,
-                            force_slot=slot
-                        ):
-                            last_used_day_index = i
-                            placed = True
-                            break
 
-                    if placed:
-                        break
+# ======================================================================
+#  PART 11 – SINGLE-HOUR CLASSES (L / PDP / GENERIC)
+# ======================================================================
 
-                # if first-half not available → allow second-half
-                if try_place_single_hour(
-                    sem, sec,
-                    item["subject"], item["faculty"],
-                    "PDP",
-                    any_rooms,
-                    faculty_busy, section_busy, group_busy,
-                    subject_daily_used, special_daily_used,
-                    timetable
-                ):
-                    last_used_day_index = i
-                    placed = True
-                    break
-
-            if not placed:
-                # last backup
-                try_place_single_hour(
-                    sem, sec,
-                    item["subject"], item["faculty"],
-                    "PDP",
-                    any_rooms,
-                    faculty_busy, section_busy, group_busy,
-                    subject_daily_used, special_daily_used,
-                    timetable
-                )
-
-    # -----------------------------------------------------------
-    # 4) PLACE TUTORIALS (T)
-    #    MUST fill FIRST-HALF completely before second-half
-    # -----------------------------------------------------------
-    for (sem, sec) in all_sem_sec:
-        t_items = T[sem][sec]
-        if not t_items:
-            continue
-
-        g1, g2 = make_groups(sec)
-        pairs = build_pairs(t_items)
-
-        for (s1, s2) in pairs:
-
-            for day in DAYS:
-
-                # subject cannot repeat same day
-                if s1["subject"] in subject_daily_used[(sem, sec)][day]:
-                    continue
-                if s2["subject"] in subject_daily_used[(sem, sec)][day]:
-                    continue
-
-                # FIRST-HALF PRIORITY
-                placed = False
-
-                for slot in FIRST_HALF_1HR:
-                    if not is_free(
-                        sem, sec, s1["faculty"], day, [slot],
-                        faculty_busy, section_busy, group_busy, [g1]
-                    ):
-                        continue
-
-                    if not is_free(
-                        sem, sec, s2["faculty"], day, [slot],
-                        faculty_busy, section_busy, group_busy, [g2]
-                    ):
-                        continue
-
-                    # place T
-                    timetable.append({
-                        "Semester": sem,
-                        "Section": sec,
-                        "Day": day,
-                        "Type": "T",
-                        "Slot": slot,
-                        "Groups": [
-                            {
-                                "group": g1,
-                                "subject": s1["subject"],
-                                "faculty": s1["faculty"],
-                                "room": random.choice(any_rooms)
-                            },
-                            {
-                                "group": g2,
-                                "subject": s2["subject"],
-                                "faculty": s2["faculty"],
-                                "room": random.choice(any_rooms)
-                            }
-                        ],
-                        "Subject": None,
-                        "Faculty": None,
-                        "Room": None
-                    })
-
-                    mark_slots(
-                        sem, sec, s1["faculty"], day, [slot],
-                        faculty_busy, section_busy, group_busy, [g1]
-                    )
-                    mark_slots(
-                        sem, sec, s2["faculty"], day, [slot],
-                        faculty_busy, section_busy, group_busy, [g2]
-                    )
-
-                    subject_daily_used[(sem, sec)][day].add(s1["subject"])
-                    subject_daily_used[(sem, sec)][day].add(s2["subject"])
-
-                    placed = True
-                    break
-
-                if placed:
-                    break
-
-                # allow SECOND-HALF ONLY if first-half fully blocked
-                if not first_half_has_empty(sem, sec, day):
-
-                    for slot in SECOND_HALF_1HR:
-
-                        if not is_free(
-                            sem, sec, s1["faculty"], day, [slot],
-                            faculty_busy, section_busy, group_busy, [g1]
-                        ):
-                            continue
-
-                        if not is_free(
-                            sem, sec, s2["faculty"], day, [slot],
-                            faculty_busy, section_busy, group_busy, [g2]
-                        ):
-                            continue
-
-                        # place T in afternoon
-                        timetable.append({
-                            "Semester": sem,
-                            "Section": sec,
-                            "Day": day,
-                            "Type": "T",
-                            "Slot": slot,
-                            "Groups": [
-                                {
-                                    "group": g1,
-                                    "subject": s1["subject"],
-                                    "faculty": s1["faculty"],
-                                    "room": random.choice(any_rooms)
-                                },
-                                {
-                                    "group": g2,
-                                    "subject": s2["subject"],
-                                    "faculty": s2["faculty"],
-                                    "room": random.choice(any_rooms)
-                                }
-                            ],
-                            "Subject": None,
-                            "Faculty": None,
-                            "Room": None
-                        })
-
-                        mark_slots(
-                            sem, sec, s1["faculty"], day, [slot],
-                            faculty_busy, section_busy, group_busy, [g1]
-                        )
-                        mark_slots(
-                            sem, sec, s2["faculty"], day, [slot],
-                            faculty_busy, section_busy, group_busy, [g2]
-                        )
-
-                        subject_daily_used[(sem, sec)][day].add(s1["subject"])
-                        subject_daily_used[(sem, sec)][day].add(s2["subject"])
-
-                        break
-
-    # -----------------------------------------------------------
-    # 5) PLACE LECTURES (L) — strict FIRST-HALF priority
-    # -----------------------------------------------------------
-    for (sem, sec) in all_sem_sec:
-        l_items = L[sem][sec]
-        if not l_items:
-            continue
-
-        fixed_room = lecture_room.get((sem, sec), random.choice(any_rooms))
-
-        for item in l_items:
-
-            placed = False
-
-            # FIRST HALF ALWAYS FIRST
-            for day in DAYS:
-                for slot in FIRST_HALF_1HR:
-                    if try_place_single_hour(
-                        sem, sec,
-                        item["subject"], item["faculty"],
-                        "L",
-                        [fixed_room],
-                        faculty_busy, section_busy, group_busy,
-                        subject_daily_used, special_daily_used,
-                        timetable,
-                        force_slot=slot
-                    ):
-                        placed = True
-                        break
-                if placed:
-                    break
-
-            # fallback to second-half ONLY when first-half full
-            if not placed:
-                for day in DAYS:
-                    if first_half_has_empty(sem, sec, day):
-                        continue
-                    try_place_single_hour(
-                        sem, sec,
-                        item["subject"], item["faculty"],
-                        "L",
-                        [fixed_room],
-                        faculty_busy, section_busy, group_busy,
-                        subject_daily_used, special_daily_used,
-                        timetable
-                    )
-
-    # SAVE
-    if timetable:
-        db["timetable"].delete_many({})
-        db["timetable"].insert_many(timetable)
-
-    return {"success": True, "count": len(timetable)}
-
-# ---------------------------------------------------------------
-#  TRY PLACE A SINGLE 1-HOUR CLASS (L / T / PDP) WITH OPTIONAL FORCE SLOT
-# ---------------------------------------------------------------
 def try_place_single_hour(
     sem, sec,
     subject, faculty,
@@ -797,112 +715,316 @@ def try_place_single_hour(
     faculty_busy, section_busy, group_busy,
     subject_daily_used, special_daily_used,
     timetable,
-    force_slot=None
+    force_slot=None,
 ):
-    """
-    If force_slot is provided:
-        → Attempt ONLY that slot (first-half rule handling is done by caller).
-    Otherwise:
-        → Try all first-half slots, then fallback to second-half.
-    """
-
-    # ------------- helper for committing --------------
     def commit(day, slot):
         room = random.choice(allowed_rooms) if allowed_rooms else None
 
         timetable.append({
             "Semester": sem,
             "Section": sec,
+            "Day": day,
+            "Type": type_name,
+            "Slot": slot,
             "Subject": subject,
             "Faculty": faculty,
-            "Type": type_name,
-            "Day": day,
-            "Slot": slot,
-            "Room": room
+            "Room": room,
         })
 
         mark_slots(
             sem, sec, faculty, day, [slot],
-            faculty_busy, section_busy, group_busy
+            faculty_busy, section_busy, group_busy,
         )
 
-        subject_daily_used[(sem, sec)][day].add(subject)
-        if type_name in ["COE", "PDP"]:
+        # Daily subject tracking (skip lectures)
+        if type_name != "L":
+            subject_daily_used[(sem, sec)][day].add(subject)
+
+        # Special day marker
+        if type_name in ("COE", "PDP"):
             special_daily_used[(sem, sec)][day] = type_name
 
         return True
 
-    # ============================================================
-    #  CASE 1 — FORCE SLOT MODE (caller decided first/second half)
-    # ============================================================
-    if force_slot:
+    # --------------------------------------------------
+    # FORCED SLOT MODE (used by 4th year logic)
+    # --------------------------------------------------
+    if force_slot is not None:
         for day in DAYS:
 
-            # COE & PDP can't be same day
-            if type_name == "PDP" and special_daily_used[(sem, sec)][day] == "COE":
-                continue
-            if type_name == "COE" and special_daily_used[(sem, sec)][day] == "PDP":
+            if is_saturday_holiday(sem, day):
                 continue
 
-            # subject cannot repeat same day
-            if subject in subject_daily_used[(sem, sec)][day]:
-                continue
+            # PDP is soft → no COE restriction
+            if type_name != "PDP":
+                if type_name == "PDP" and special_daily_used[(sem, sec)][day] == "COE":
+                    continue
 
-            # check availability
+                if not can_place_without_gap(sem, sec, day, force_slot, section_busy):
+                    continue
+
             if is_free(
                 sem, sec, faculty, day, [force_slot],
-                faculty_busy, section_busy, group_busy
+                faculty_busy, section_busy, group_busy,
             ):
                 return commit(day, force_slot)
 
-        return False  # forced slot could not be placed
+        return False
 
-    # ============================================================
-    #  CASE 2 — NORMAL MODE (FIRST HALF → SECOND HALF)
-    # ============================================================
+    # --------------------------------------------------
+    # NORMAL MODE
+    # --------------------------------------------------
     for day in DAYS:
 
-        # COE & PDP conflict
-        if type_name == "PDP" and special_daily_used[(sem, sec)][day] == "COE":
-            continue
-        if type_name == "COE" and special_daily_used[(sem, sec)][day] == "PDP":
+        if is_saturday_holiday(sem, day):
             continue
 
-        # subject cannot repeat same day
-        if subject in subject_daily_used[(sem, sec)][day]:
-            continue
+        for slot in ALL_SLOTS_ORDER:
 
-        # ---------- FIRST HALF ----------
-        for slot in FIRST_HALF_1HR:
+            # PDP → NO gap rule, NO COE restriction
+            if type_name != "PDP":
+                if not can_place_without_gap(sem, sec, day, slot, section_busy):
+                    continue
+
             if is_free(
                 sem, sec, faculty, day, [slot],
-                faculty_busy, section_busy, group_busy
-            ):
-                return commit(day, slot)
-
-        # ---------- SECOND HALF ----------
-        for slot in SECOND_HALF_1HR:
-            if is_free(
-                sem, sec, faculty, day, [slot],
-                faculty_busy, section_busy, group_busy
+                faculty_busy, section_busy, group_busy,
             ):
                 return commit(day, slot)
 
     return False
 
-# ======================================================================
-#  PART 7 — FINAL WRAPPER + EXPORT
-# ======================================================================
-
-def run_timetable_generator():
-    """
-    Wrapper function — can be called directly from route/controller.
-    Clears old timetable and regenerates a fresh one.
-    """
-    result = generate_timetable()
-    return result
 
 
 # ======================================================================
-#  END OF FILE
+#  PART 12 – MAIN GENERATION
 # ======================================================================
+
+def generate_timetable():
+    random.seed(999)
+
+    teaching_load, room_list = load_data()
+    L, T, P, PDP, COE, section_map = group_by_sem_section(teaching_load)
+    lecture_room, lab_rooms_normal, any_rooms = build_room_map(room_list)
+
+    (
+        faculty_busy,
+        section_busy,
+        group_busy,
+        subject_daily_used,
+        special_daily_used,
+        timetable,
+    ) = initialize_state()
+
+    coe_room_busy = {}
+    second_half_lecture_used = defaultdict(int)
+
+    all_sem_sec = [(sem, sec) for sem in section_map for sec in section_map[sem]]
+
+    # ==========================================================
+    # 0) FIXED PROJECT LABS (SEM 7 / 8)
+    # ==========================================================
+    extract_sem7_project1_labs(P)
+    place_fixed_project_from_p_or_coe(
+        P, COE, any_rooms,
+        faculty_busy, section_busy, group_busy,
+        subject_daily_used, special_daily_used,
+        timetable
+    )
+
+    # ==========================================================
+    # 1) LABS (P)
+    # ==========================================================
+    for sem, sec in all_sem_sec:
+        if not P[sem][sec]:
+            continue
+
+        g1, g2 = make_groups(sec)
+        for s1, s2 in build_pairs(P[sem][sec]):
+            if not try_place_two_hour_lab(
+                sem, sec,
+                s1["subject"], s2["subject"],
+                s1["faculty"], s2["faculty"],
+                g1, g2,
+                lab_rooms_normal,
+                faculty_busy, section_busy, group_busy,
+                subject_daily_used, special_daily_used,
+                timetable,
+            ):
+                raise Exception(f"LAB NOT PLACED ❌ Sem {sem} Sec {sec}")
+
+    # ==========================================================
+    # 2) COE (🔥 SEM 3 SEC J EXCEPTION ADDED)
+    # ==========================================================
+    for sem, sec in all_sem_sec:
+        for item in COE[sem][sec]:
+
+            # ✅ Fixed room ONLY for Sem 3 & 5 (NOT 4th year)
+            room = coe_fixed_room_for_sem(sem)
+            if sem in (7, 8):
+                room = None
+
+            ok = (
+                try_place_coe_block(
+                    sem, sec,
+                    item["subject"], item["faculty"],
+                    room,
+                    faculty_busy, section_busy, group_busy,
+                    subject_daily_used, special_daily_used,
+                    coe_room_busy,
+                    timetable,
+                )
+                if room
+                else try_place_two_hour(
+                    sem, sec,
+                    item["subject"], item["subject"],
+                    item["faculty"], item["faculty"],
+                    None, None,
+                    any_rooms,
+                    faculty_busy, section_busy, group_busy,
+                    subject_daily_used, special_daily_used,
+                    timetable,
+                    type_name="COE",
+                )
+            )
+
+            # 🔥 ONLY ALLOWED FAILURE
+            if not ok:
+                if sem == 3 and sec == "J":
+                    print("⚠️ COE skipped for Sem 3 Sec J (allowed)")
+                    continue
+                else:
+                    raise Exception(f"COE NOT PLACED ❌ Sem {sem} Sec {sec}")
+
+    # ==========================================================
+    # 3) PDP
+    # ==========================================================
+    for sem, sec in all_sem_sec:
+        for item in PDP[sem][sec]:
+            if not try_place_single_hour(
+                sem, sec,
+                item["subject"], item["faculty"],
+                "PDP",
+                any_rooms,
+                faculty_busy, section_busy, group_busy,
+                subject_daily_used, special_daily_used,
+                timetable,
+            ):
+                raise Exception(f"PDP NOT PLACED ❌ Sem {sem} Sec {sec}")
+
+    # ==========================================================
+    # 4) LECTURES (4th YEAR RULE INCLUDED)
+    # ==========================================================
+    for sem, sec in all_sem_sec:
+        l_items = L[sem][sec]
+        if not l_items:
+            continue
+
+        fixed_room = lecture_room.get((sem, sec))
+        rooms_for_lecture = [fixed_room] if fixed_room else any_rooms
+
+        for item in l_items:
+            placed = False
+
+            if sem in (7, 8):
+                for day in DAYS:
+                    if is_saturday_holiday(sem, day):
+                        continue
+
+                    required = [
+                        "09:00-10:00",
+                        "10:00-11:00",
+                        "11:00-12:00",
+                        "12:00-13:00",
+                    ]
+
+                    nine_to_one_full = all(
+                        section_busy.get((sem, sec, day, s), False)
+                        for s in required
+                    )
+
+                    # FIRST HALF
+                    for slot in FIRST_HALF_1HR:
+                        if is_free(
+                            sem, sec, item["faculty"], day, [slot],
+                            faculty_busy, section_busy, group_busy
+                        ):
+                            try_place_single_hour(
+                                sem, sec,
+                                item["subject"], item["faculty"],
+                                "L",
+                                rooms_for_lecture,
+                                faculty_busy, section_busy, group_busy,
+                                subject_daily_used, special_daily_used,
+                                timetable,
+                                force_slot=slot,
+                            )
+                            placed = True
+                            break
+
+                    if placed:
+                        break
+
+                    # SECOND HALF (max 2/week & only if 9–1 full)
+                    if nine_to_one_full and second_half_lecture_used[(sem, sec)] < 2:
+                        for slot in SECOND_HALF_1HR:
+                            if is_free(
+                                sem, sec, item["faculty"], day, [slot],
+                                faculty_busy, section_busy, group_busy
+                            ):
+                                try_place_single_hour(
+                                    sem, sec,
+                                    item["subject"], item["faculty"],
+                                    "L",
+                                    rooms_for_lecture,
+                                    faculty_busy, section_busy, group_busy,
+                                    subject_daily_used, special_daily_used,
+                                    timetable,
+                                    force_slot=slot,
+                                )
+                                second_half_lecture_used[(sem, sec)] += 1
+                                placed = True
+                                break
+
+                    if placed:
+                        break
+
+            else:
+                for day in DAYS:
+                    if is_saturday_holiday(sem, day):
+                        continue
+
+                    for slot in ALL_SLOTS_ORDER:
+                        if can_place_without_gap(sem, sec, day, slot, section_busy):
+                            if is_free(
+                                sem, sec, item["faculty"], day, [slot],
+                                faculty_busy, section_busy, group_busy
+                            ):
+                                try_place_single_hour(
+                                    sem, sec,
+                                    item["subject"], item["faculty"],
+                                    "L",
+                                    rooms_for_lecture,
+                                    faculty_busy, section_busy, group_busy,
+                                    subject_daily_used, special_daily_used,
+                                    timetable,
+                                    force_slot=slot,
+                                )
+                                placed = True
+                                break
+                    if placed:
+                        break
+
+            if not placed:
+                raise Exception(f"LECTURE NOT PLACED ❌ Sem {sem} Sec {sec}")
+
+    # ==========================================================
+    # SAVE
+    # ==========================================================
+    db["timetable"].delete_many({})
+    db["timetable"].insert_many(timetable)
+
+    return {"success": True, "count": len(timetable)}
+
+
+

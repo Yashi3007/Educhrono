@@ -4,6 +4,7 @@ from passlib.context import CryptContext
 from jose import jwt
 from datetime import datetime, timedelta
 from typing import Optional
+from pymongo import ReturnDocument
 from app import db
 
 router = APIRouter()
@@ -60,9 +61,15 @@ class TokenResponse(BaseModel):
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
+def verify_password(plain_password, hashed_password):
+    try:
+        # ✅ Normal secure verification
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        # ✅ SAFETY FALLBACK:
+        # Agar DB me password plain text ho
+        return plain_password == hashed_password
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
@@ -95,42 +102,40 @@ def ensure_admin_user():
 def register_user(request: RegisterRequest):
     ensure_admin_user()
 
-    # 🔹 Check if already exists
-    existing = db["users"].find_one({"email": request.email})
-    if existing:
-        raise HTTPException(status_code=400, detail="User already exists with this email")
-
     # 🔹 Hash password
     hashed_pw = get_password_hash(request.password)
 
-    # 🔹 Common user data
-    new_user = {
+    # 🔹 MongoDB Atomic Upsert: Update if exists, insert if not
+    user_data = {
         "name": request.name,
-        "email": request.email,
         "password": hashed_pw,
         "role": request.role.upper(),
         "department": request.department,
-        "createdAt": datetime.utcnow(),
+        "updatedAt": datetime.utcnow()
     }
-
-    # 🔹 Add semester & section if student
+    
+    # Add semester & section if student
     if request.role.lower() == "student":
-        if not request.semester or not request.section:
-            raise HTTPException(
-                status_code=400,
-                detail="Semester and Section are required for student registration."
-            )
-        new_user["semester"] = request.semester
-        new_user["section"] = request.section
+        user_data["semester"] = request.semester
+        user_data["section"] = request.section
 
-    db["users"].insert_one(new_user)
+    # Execute atomic upsert in MongoDB
+    user_to_return = db["users"].find_one_and_update(
+        {"email": request.email},
+        {
+            "$set": user_data,
+            "$setOnInsert": {"email": request.email, "createdAt": datetime.utcnow()}
+        },
+        upsert=True,
+        return_document=ReturnDocument.AFTER
+    )
 
     # 🔹 Generate access token with extra info
     token_data = {
-        "sub": new_user["email"],
-        "role": new_user["role"],
-        "semester": new_user.get("semester"),
-        "section": new_user.get("section"),
+        "sub": user_to_return["email"],
+        "role": user_to_return["role"],
+        "semester": user_to_return.get("semester"),
+        "section": user_to_return.get("section"),
     }
     access_token = create_access_token(token_data)
 
@@ -138,11 +143,11 @@ def register_user(request: RegisterRequest):
         "access_token": access_token,
         "token_type": "bearer",
         "user": {
-            "email": new_user["email"],
-            "role": new_user["role"],
-            "name": new_user["name"],
-            "semester": new_user.get("semester"),
-            "section": new_user.get("section"),
+            "email": user_to_return["email"],
+            "role": user_to_return["role"],
+            "name": user_to_return["name"],
+            "semester": user_to_return.get("semester"),
+            "section": user_to_return.get("section"),
             "token": access_token,
         },
     }
@@ -155,9 +160,19 @@ def register_user(request: RegisterRequest):
 def login(request: LoginRequest):
     ensure_admin_user()
 
-    user = db["users"].find_one({"email": request.email})
-    if not user:
+    # 🔹 Safety Check: Check if multiple accounts exist for this email
+    user_docs = list(db["users"].find({"email": request.email}))
+    
+    if len(user_docs) > 1:
+        raise HTTPException(
+            status_code=500, 
+            detail="Database integrity error: Multiple accounts found with this email. Please contact admin."
+        )
+    
+    if not user_docs:
         raise HTTPException(status_code=401, detail="User not found")
+
+    user = user_docs[0]
 
     if not verify_password(request.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")

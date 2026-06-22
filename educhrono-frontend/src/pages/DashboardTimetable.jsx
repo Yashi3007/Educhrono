@@ -364,6 +364,8 @@ const downloadPDF = async () => {
     });
     [...el.children].forEach(sanitizeColors);
   };
+
+  
   sanitizeColors(clone);
 
   // Apply PDF-friendly styling
@@ -493,6 +495,39 @@ const downloadPDF = async () => {
   }
 };
 
+const downloadWord = async () => {
+  try {
+    const roleValue = user?.role?.toLowerCase() || "admin";
+    const identifier = "all";
+
+    const res = await fetch(
+      `http://localhost:8000/timetable/download-word/${roleValue}/${identifier}`
+    );
+
+    if (!res.ok) {
+      throw new Error("Failed to download Word file");
+    }
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "timetable.docx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    window.URL.revokeObjectURL(url);
+
+  } catch (err) {
+    console.error("❌ Word Download Error:", err);
+    alert("Word download failed ❌");
+  }
+};
+
+
+
   // ----------------------------------------------
   return (
     <div className="min-h-screen bg-gray-50 p-8">
@@ -542,6 +577,10 @@ const downloadPDF = async () => {
               /> */}
             </div>
           </section>
+
+
+
+
 
 {/* ========================== VIEW UPLOADED DATA ========================== */}
           <section className="bg-white p-6 rounded-xl shadow-md mb-10">
@@ -666,13 +705,20 @@ const downloadPDF = async () => {
 
             {filteredTimetable.length > 0 && (
               <div className="text-right mt-4">
-                <button
-                  onClick={downloadPDF}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-md"
-                >
-                  📄 Download PDF
-                </button>
-              </div>
+              <button
+                onClick={downloadPDF}
+                className="bg-blue-600 text-white px-4 py-2 rounded-md"
+              >
+                📄 Download PDF
+              </button>
+            
+              <button
+                onClick={downloadWord}
+                className="bg-green-600 text-white px-4 py-2 rounded-md ml-2"
+              >
+                📝 Download Word
+              </button>
+            </div>
             )}
           </section>
         </>
@@ -680,3 +726,4 @@ const downloadPDF = async () => {
     </div>
   );
 }
+

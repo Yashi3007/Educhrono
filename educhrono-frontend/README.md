@@ -1,16 +1,44 @@
-# React + Vite
+# 🎨 EduChrono Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This is the React-based frontend for the **EduChrono** Timetable Management System.
 
-Currently, two official plugins are available:
+## 🚀 Getting Started
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+### Prerequisites
+- Node.js (v16+)
+- npm or yarn
 
-## React Compiler
+### Installation
+```bash
+npm install
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Development
+```bash
+npm run dev
+```
 
-## Expanding the ESLint configuration
+### Build
+```bash
+npm run build
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## 🛠️ Tech Stack
+- **React**: UI Library
+- **Vite**: Build tool
+- **Tailwind CSS**: Styling
+- **React Router**: Routing
+- **Lucide React**: Icons
+
+## 📂 Folder Structure
+- `src/components`: Common UI elements (Buttons, Inputs, Modals, etc.)
+- `src/pages`: Main application screens (Dashboard, Login, Register)
+- `src/services`: API call logic and axios configurations
+- `src/utils`: Helper functions and constants
+- `src/context`: React Context for state management (Auth, etc.)
+
+## 🔑 Key Pages
+- **Login/Register**: Authentication entry points.
+- **DashboardTimetable**: Main management area for HODs.
+- **DashboardFaculty**: View assigned classes and schedules.
+- **DashboardStudent**: View personal or class timetables.
